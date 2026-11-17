@@ -1,0 +1,94 @@
+name: Build Android Debug APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build KKHM Off-Course Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+      - name: Prepare debug keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Using persistent debug.keystore from GitHub Actions secret."
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > debug.keystore
+            KEYSTORE_SOURCE="GitHub Secret (DEBUG_KEYSTORE_BASE64)"
+          else
+            echo "DEBUG_KEYSTORE_BASE64 secret not configured; generating ephemeral debug.keystore."
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=KKHM Off-Course Debug,O=KKHM Islamic and Arts College,C=IN"
+            KEYSTORE_SOURCE="Auto-generated ephemeral keystore"
+          fi
+
+          CERT_INFO=$(keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android)
+          SHA1=$(printf '%s\n' "$CERT_INFO" | awk -F': ' '/SHA1:/{print $2; exit}')
+          SHA256=$(printf '%s\n' "$CERT_INFO" | awk -F': ' '/SHA256:/{print $2; exit}')
+
+          {
+            echo "## KKHM Off-Course — Build Summary"
+            echo ""
+            echo "- **Keystore source:** ${KEYSTORE_SOURCE}"
+            echo "- **Application ID:** \`com.aistudio.cicoffcourse.mvrkpt\`"
+            echo "- **Signing SHA-1:** \`${SHA1}\`"
+            echo "- **Signing SHA-256:** \`${SHA256}\`"
+            echo ""
+            if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
+              echo "> **Google Sign-In & Firebase Note:** Because \`DEBUG_KEYSTORE_BASE64\` is not yet saved in GitHub Secrets, this APK was signed with a new keystore. To enable Google Sign-In on this APK, add the **Signing SHA-1** above inside **Firebase Console → Project Settings (\`gen-lang-client-0628851552\`) → Your apps (\`com.aistudio.cicoffcourse.mvrkpt\`) → Add fingerprint**."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Package APK for download
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/KKHM-Off-Course-debug.apk
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KKHM-Off-Course-Debug-APK
+          path: dist/KKHM-Off-Course-debug.apk
+          retention-days: 30
