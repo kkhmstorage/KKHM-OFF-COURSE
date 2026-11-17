@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Subtle open scholarly book base inside 66dp safe zone (center 54,54; bounds 28..80) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M29,63 C29,61.5 30.2,60.5 31.8,60.8 L52,64.8 L52,75.5 L31.2,71.2 C29.9,70.9 29,69.8 29,68.5 Z" />
+    <path
+        android:fillColor="#FFE0F2EC"
+        android:pathData="M79,63 C79,61.5 77.8,60.5 76.2,60.8 L56,64.8 L56,75.5 L76.8,71.2 C78.1,70.9 79,69.8 79,68.5 Z" />
+    <!-- Crescent arc motif inspired by CIC emblem -->
+    <path
+        android:fillColor="#FFF5C451"
+        android:pathData="M54,28 C44.5,28 37,35.5 37,45 C37,51.2 40.3,56.6 45.2,59.6 C42.4,56.4 41,52.2 41,47.5 C41,38.8 47.4,32 55.6,31.2 C55.1,29.1 54.6,28 54,28 Z" />
+    <!-- Scholarly Fountain Pen Nib centered -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,29 L63,46 L59.5,58 L48.5,58 L45,46 Z" />
+    <!-- Pen Nib Collar -->
+    <path
+        android:fillColor="#FFF5C451"
+        android:pathData="M48,58.5 L60,58.5 L59,62.5 L49,62.5 Z" />
+    <!-- Pen Nib Slit & Breather Hole -->
+    <path
+        android:fillColor="#FF0D5C4B"
+        android:pathData="M53.2,29 L54.8,29 L54.8,44 L53.2,44 Z" />
+    <path
+        android:fillColor="#FF0D5C4B"
+        android:pathData="M54,43 A3,3 0 1,0 54,49 A3,3 0 1,0 54,43 Z" />
+</vector>

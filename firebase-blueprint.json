@@ -1,0 +1,179 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Google device profile and appearance preferences.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["STUDENT", "GUIDE", "PRINCIPAL", "ADMIN"] },
+        "cicAdNo": { "type": "string" },
+        "clgAdNo": { "type": "string" },
+        "classDepartment": { "type": "string" },
+        "stream": { "type": "string", "enum": ["Wafy", "Wafy Arts", "Wafiyya", "Wafiyya Day", "Wafiyya Arts", "Wafiyya Distance"] },
+        "collegeAfflName": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "darkModePreference": { "type": "string", "enum": ["SYSTEM", "LIGHT", "DARK"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "email", "role", "darkModePreference", "createdAt", "updatedAt"]
+    },
+    "CollegeAccount": {
+      "title": "CollegeAccount",
+      "description": "Admin-issued username/password credentials and strict role assignment for KKHM Islamic & Arts College.",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["STUDENT", "GUIDE", "PRINCIPAL", "ADMIN"] },
+        "passwordSalt": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "accountStatus": { "type": "string", "enum": ["ACTIVE", "SUSPENDED"] },
+        "cicAdNo": { "type": "string" },
+        "classDepartment": { "type": "string" },
+        "stream": { "type": "string" },
+        "assignedGuideUsername": { "type": "string" },
+        "phone": { "type": "string" },
+        "boundUid": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "username", "displayName", "role", "passwordSalt", "passwordHash",
+        "accountStatus", "boundUid", "createdByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "AcademicTerm": {
+      "title": "AcademicTerm",
+      "description": "Configured Academic Year and Semester settings (past, active, upcoming).",
+      "type": "object",
+      "properties": {
+        "visibility": { "type": "string", "enum": ["campus"] },
+        "academicYear": { "type": "string" },
+        "semester": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "UPCOMING", "ARCHIVED"] },
+        "totalWeeks": { "type": "integer" },
+        "defaultPeriodsPerWeek": { "type": "integer" },
+        "notes": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["visibility", "academicYear", "semester", "status", "totalWeeks", "defaultPeriodsPerWeek", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "OffCourseRecord": {
+      "title": "OffCourseRecord",
+      "description": "Digitized KKHM / CIC Off-Course Record scoped by studentUsername, guideUsername, and principal.",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string" },
+        "studentUsername": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "guideUsername": { "type": "string" },
+        "guideEmail": { "type": "string" },
+        "principalEmail": { "type": "string" },
+        "studentName": { "type": "string" },
+        "cicAdNo": { "type": "string" },
+        "clgAdNo": { "type": "string" },
+        "classDepartment": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "semester": { "type": "string" },
+        "stream": { "type": "string", "enum": ["Wafy", "Wafy Arts", "Wafiyya", "Wafiyya Day", "Wafiyya Arts", "Wafiyya Distance"] },
+        "collegeAfflName": { "type": "string" },
+        "subjectTitle": { "type": "string" },
+        "proposalAppNo": { "type": "string" },
+        "credit": { "type": "integer" },
+        "guideName": { "type": "string" },
+        "guidePhone": { "type": "string" },
+        "guideWhatsapp": { "type": "string" },
+        "referenceBooks": { "type": "string" },
+        "timetableSlots": { "type": "array" },
+        "periodsPerWeek": { "type": "integer" },
+        "guideSignatureStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REVISION_REQUIRED"] },
+        "guideSignatureName": { "type": "string" },
+        "guideRemarks": { "type": "string" },
+        "principalSignatureStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REVISION_REQUIRED"] },
+        "principalSignatureName": { "type": "string" },
+        "principalRemarks": { "type": "string" },
+        "recordStatus": { "type": "string", "enum": ["ACTIVE", "SUBMITTED", "COMPLETED", "ARCHIVED"] },
+        "completedWeeksCount": { "type": "integer" },
+        "verifiedWeeksCount": { "type": "integer" },
+        "totalAllocatedPeriods": { "type": "integer" },
+        "totalUtilizedPeriods": { "type": "integer" },
+        "averageFocusRating": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "studentUid", "studentEmail", "guideEmail", "principalEmail",
+        "studentName", "cicAdNo", "classDepartment", "academicYear", "semester",
+        "stream", "collegeAfflName", "subjectTitle", "credit", "guideName",
+        "timetableSlots", "periodsPerWeek",
+        "guideSignatureStatus", "principalSignatureStatus", "recordStatus",
+        "completedWeeksCount", "verifiedWeeksCount", "totalAllocatedPeriods",
+        "totalUtilizedPeriods", "averageFocusRating", "createdAt", "updatedAt"
+      ]
+    },
+    "WeeklyStudyReport": {
+      "title": "WeeklyStudyReport",
+      "description": "Weekly study report (Weeks 1-18+) with date range, description, period utilization breakdown, and mentor verification.",
+      "type": "object",
+      "properties": {
+        "recordId": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "studentUsername": { "type": "string" },
+        "guideUsername": { "type": "string" },
+        "guideEmail": { "type": "string" },
+        "principalEmail": { "type": "string" },
+        "weekNumber": { "type": "integer" },
+        "dateFrom": { "type": "string" },
+        "dateTo": { "type": "string" },
+        "description": { "type": "string" },
+        "allocatedPeriods": { "type": "integer" },
+        "utilizedPeriods": { "type": "integer" },
+        "focusRating": { "type": "integer" },
+        "utilizationNotes": { "type": "string" },
+        "periodLogs": { "type": "array" },
+        "verificationStatus": { "type": "string", "enum": ["PENDING", "VERIFIED", "NEEDS_REVISION"] },
+        "authorizedSignature": { "type": "string" },
+        "mentorFeedback": { "type": "string" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "recordId", "studentUid", "guideEmail", "principalEmail",
+        "weekNumber", "dateFrom", "dateTo", "description",
+        "allocatedPeriods", "utilizedPeriods", "focusRating",
+        "periodLogs", "verificationStatus", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Google-authenticated device profiles."
+    },
+    "/college_accounts/{username}": {
+      "schema": { "$ref": "#/entities/CollegeAccount" },
+      "description": "Admin-managed college accounts with issued usernames, salted password hashes, and roles."
+    },
+    "/academic_terms/{termId}": {
+      "schema": { "$ref": "#/entities/AcademicTerm" },
+      "description": "Academic years and semesters available for selection and historical archiving."
+    },
+    "/off_course_records/{recordId}": {
+      "schema": { "$ref": "#/entities/OffCourseRecord" },
+      "description": "KKHM / CIC Off-Course records isolated per student, assigned guide, principal, and admin."
+    },
+    "/off_course_records/{recordId}/weekly_reports/{weekId}": {
+      "schema": { "$ref": "#/entities/WeeklyStudyReport" },
+      "description": "Weekly study reports and period utilization logs."
+    }
+  }
+}

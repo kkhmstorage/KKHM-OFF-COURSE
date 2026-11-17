@@ -1,0 +1,511 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasVerifiedEmail() {
+      return isSignedIn() &&
+             request.auth.token.email_verified == true &&
+             request.auth.token.email is string;
+    }
+
+    function isBootstrappedAdmin() {
+      return hasVerifiedEmail() &&
+             request.auth.token.email == 'kkhmstorage@gmail.com';
+    }
+
+    function isAssignedGuide(data) {
+      return hasVerifiedEmail() &&
+             data.guideEmail is string &&
+             data.guideEmail.size() > 0 &&
+             data.guideEmail == request.auth.token.email;
+    }
+
+    function isAssignedPrincipal(data) {
+      return hasVerifiedEmail() &&
+             data.principalEmail is string &&
+             data.principalEmail.size() > 0 &&
+             data.principalEmail == request.auth.token.email;
+    }
+
+    // --- VALIDATION BLUEPRINTS ---
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.role in ['STUDENT', 'GUIDE', 'PRINCIPAL', 'ADMIN'] &&
+             data.darkModePreference in ['SYSTEM', 'LIGHT', 'DARK'] &&
+             (!('cicAdNo' in data) || (data.cicAdNo is string && data.cicAdNo.size() <= 40)) &&
+             (!('clgAdNo' in data) || (data.clgAdNo is string && data.clgAdNo.size() <= 40)) &&
+             (!('classDepartment' in data) || (data.classDepartment is string && data.classDepartment.size() <= 80)) &&
+             (!('stream' in data) || (data.stream in ['', 'Wafy', 'Wafy Arts', 'Wafiyya', 'Wafiyya Day', 'Wafiyya Arts', 'Wafiyya Distance'])) &&
+             (!('collegeAfflName' in data) || (data.collegeAfflName is string && data.collegeAfflName.size() <= 160)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+             (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 30)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCollegeAccount(data) {
+      return data.username is string && data.username.size() >= 3 && data.username.size() <= 40 &&
+             data.username.matches('^[a-z0-9_\\-]+$') &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             data.role in ['STUDENT', 'GUIDE', 'PRINCIPAL', 'ADMIN'] &&
+             data.passwordSalt is string && data.passwordSalt.size() >= 8 && data.passwordSalt.size() <= 64 &&
+             data.passwordHash is string && data.passwordHash.size() >= 32 && data.passwordHash.size() <= 128 &&
+             data.accountStatus in ['ACTIVE', 'SUSPENDED'] &&
+             (!('cicAdNo' in data) || (data.cicAdNo is string && data.cicAdNo.size() <= 40)) &&
+             (!('classDepartment' in data) || (data.classDepartment is string && data.classDepartment.size() <= 80)) &&
+             (!('stream' in data) || (data.stream in ['', 'Wafy', 'Wafy Arts', 'Wafiyya', 'Wafiyya Day', 'Wafiyya Arts', 'Wafiyya Distance'])) &&
+             (!('assignedGuideUsername' in data) || (data.assignedGuideUsername is string && data.assignedGuideUsername.size() <= 40)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+             data.boundUid is string && data.boundUid.size() <= 128 &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAcademicTerm(data) {
+      return data.visibility == 'campus' &&
+             data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 30 &&
+             data.status in ['ACTIVE', 'UPCOMING', 'ARCHIVED'] &&
+             data.totalWeeks is int && data.totalWeeks >= 1 && data.totalWeeks <= 24 &&
+             data.defaultPeriodsPerWeek is int && data.defaultPeriodsPerWeek >= 1 && data.defaultPeriodsPerWeek <= 35 &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidOffCourseRecord(data) {
+      return data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             (!('studentUsername' in data) || (data.studentUsername is string && data.studentUsername.size() <= 40)) &&
+             data.studentEmail is string && data.studentEmail.size() <= 120 &&
+             (!('guideUsername' in data) || (data.guideUsername is string && data.guideUsername.size() <= 40)) &&
+             data.guideEmail is string && data.guideEmail.size() <= 120 &&
+             data.principalEmail is string && data.principalEmail.size() <= 120 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
+             data.cicAdNo is string && data.cicAdNo.size() >= 1 && data.cicAdNo.size() <= 40 &&
+             (!('clgAdNo' in data) || (data.clgAdNo is string && data.clgAdNo.size() <= 40)) &&
+             data.classDepartment is string && data.classDepartment.size() >= 1 && data.classDepartment.size() <= 80 &&
+             data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 30 &&
+             data.stream in ['Wafy', 'Wafy Arts', 'Wafiyya', 'Wafiyya Day', 'Wafiyya Arts', 'Wafiyya Distance'] &&
+             data.collegeAfflName is string && data.collegeAfflName.size() >= 1 && data.collegeAfflName.size() <= 160 &&
+             data.subjectTitle is string && data.subjectTitle.size() >= 1 && data.subjectTitle.size() <= 160 &&
+             (!('proposalAppNo' in data) || (data.proposalAppNo is string && data.proposalAppNo.size() <= 60)) &&
+             data.credit is int && data.credit >= 0 && data.credit <= 20 &&
+             data.guideName is string && data.guideName.size() >= 1 && data.guideName.size() <= 100 &&
+             (!('guidePhone' in data) || (data.guidePhone is string && data.guidePhone.size() <= 30)) &&
+             (!('guideWhatsapp' in data) || (data.guideWhatsapp is string && data.guideWhatsapp.size() <= 30)) &&
+             (!('referenceBooks' in data) || (data.referenceBooks is string && data.referenceBooks.size() <= 600)) &&
+             data.timetableSlots is list && data.timetableSlots.size() <= 49 &&
+             (data.timetableSlots.size() == 0 || data.timetableSlots[0] is string) &&
+             data.periodsPerWeek is int && data.periodsPerWeek >= 0 && data.periodsPerWeek <= 49 &&
+             data.guideSignatureStatus in ['PENDING', 'APPROVED', 'REVISION_REQUIRED'] &&
+             (!('guideSignatureName' in data) || (data.guideSignatureName is string && data.guideSignatureName.size() <= 100)) &&
+             (!('guideRemarks' in data) || (data.guideRemarks is string && data.guideRemarks.size() <= 300)) &&
+             data.principalSignatureStatus in ['PENDING', 'APPROVED', 'REVISION_REQUIRED'] &&
+             (!('principalSignatureName' in data) || (data.principalSignatureName is string && data.principalSignatureName.size() <= 100)) &&
+             (!('principalRemarks' in data) || (data.principalRemarks is string && data.principalRemarks.size() <= 300)) &&
+             data.recordStatus in ['ACTIVE', 'SUBMITTED', 'COMPLETED', 'ARCHIVED'] &&
+             data.completedWeeksCount is int && data.completedWeeksCount >= 0 && data.completedWeeksCount <= 24 &&
+             data.verifiedWeeksCount is int && data.verifiedWeeksCount >= 0 && data.verifiedWeeksCount <= 24 &&
+             data.totalAllocatedPeriods is int && data.totalAllocatedPeriods >= 0 && data.totalAllocatedPeriods <= 500 &&
+             data.totalUtilizedPeriods is int && data.totalUtilizedPeriods >= 0 && data.totalUtilizedPeriods <= 500 &&
+             data.averageFocusRating is number && data.averageFocusRating >= 0 && data.averageFocusRating <= 5 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidWeeklyReport(data) {
+      return data.recordId is string && data.recordId.size() >= 1 && data.recordId.size() <= 128 &&
+             data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             (!('studentUsername' in data) || (data.studentUsername is string && data.studentUsername.size() <= 40)) &&
+             (!('guideUsername' in data) || (data.guideUsername is string && data.guideUsername.size() <= 40)) &&
+             data.guideEmail is string && data.guideEmail.size() <= 120 &&
+             data.principalEmail is string && data.principalEmail.size() <= 120 &&
+             data.weekNumber is int && data.weekNumber >= 1 && data.weekNumber <= 24 &&
+             data.dateFrom is string && data.dateFrom.size() <= 20 &&
+             data.dateTo is string && data.dateTo.size() <= 20 &&
+             data.description is string && data.description.size() <= 1500 &&
+             data.allocatedPeriods is int && data.allocatedPeriods >= 0 && data.allocatedPeriods <= 49 &&
+             data.utilizedPeriods is int && data.utilizedPeriods >= 0 && data.utilizedPeriods <= 49 &&
+             data.focusRating is int && data.focusRating >= 1 && data.focusRating <= 5 &&
+             (!('utilizationNotes' in data) || (data.utilizationNotes is string && data.utilizationNotes.size() <= 600)) &&
+             data.periodLogs is list && data.periodLogs.size() <= 35 &&
+             (data.periodLogs.size() == 0 || data.periodLogs[0] is string) &&
+             data.verificationStatus in ['PENDING', 'VERIFIED', 'NEEDS_REVISION'] &&
+             (!('authorizedSignature' in data) || (data.authorizedSignature is string && data.authorizedSignature.size() <= 100)) &&
+             (!('mentorFeedback' in data) || (data.mentorFeedback is string && data.mentorFeedback.size() <= 500)) &&
+             (!('verifiedAt' in data) || data.verifiedAt == null || (data.verifiedAt is timestamp && data.verifiedAt <= request.time)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // --- 1. USER PROFILES ---
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().role != 'ADMIN' &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'email', 'role', 'darkModePreference', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
+                         'classDepartment', 'stream', 'collegeAfflName', 'phone', 'whatsapp',
+                         'darkModePreference', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (incoming().role == existing().role || incoming().role != 'ADMIN') &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
+                         'classDepartment', 'stream', 'collegeAfflName', 'phone', 'whatsapp',
+                         'darkModePreference', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // --- 2. ADMIN-ISSUED COLLEGE ACCOUNTS (USERNAME & PASSWORD) ---
+    match /college_accounts/{username} {
+      // Single-document lookup for credential verification
+      allow get: if isSignedIn() && isValidId(username);
+
+      // List access strictly scoped to Admin or user's own created/bound accounts
+      allow list: if isSignedIn() && (
+        isBootstrappedAdmin() ||
+        resource.data.boundUid == request.auth.uid ||
+        resource.data.createdByUid == request.auth.uid
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(username) &&
+                       incoming().username == username &&
+                       incoming().createdByUid == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'username', 'displayName', 'role', 'passwordSalt', 'passwordHash',
+                         'accountStatus', 'boundUid', 'createdByUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'username', 'displayName', 'role', 'passwordSalt', 'passwordHash',
+                         'accountStatus', 'cicAdNo', 'classDepartment', 'stream',
+                         'assignedGuideUsername', 'phone', 'boundUid', 'createdByUid',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCollegeAccount(incoming()) &&
+                       (
+                         isBootstrappedAdmin() ||
+                         (incoming().role == 'ADMIN' && username == 'admin' &&
+                          !exists(/databases/$(database)/documents/college_accounts/admin))
+                       );
+
+      allow update: if isSignedIn() &&
+                       isValidId(username) &&
+                       incoming().username == existing().username &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidCollegeAccount(incoming()) &&
+                       (
+                         // Tier 1: Bootstrapped Admin or original Admin creator
+                         (
+                           (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayName', 'role', 'passwordSalt', 'passwordHash',
+                             'accountStatus', 'cicAdNo', 'classDepartment', 'stream',
+                             'assignedGuideUsername', 'phone', 'boundUid', 'updatedAt'
+                           ])
+                         ) ||
+                         // Tier 2: Account owner binding their UID on first credential login
+                         (
+                           existing().boundUid == '' &&
+                           incoming().boundUid == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['boundUid', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(username) &&
+                       (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid);
+    }
+
+    // --- 3. ACADEMIC TERMS (YEARS & SEMESTERS) ---
+    match /academic_terms/{termId} {
+      allow get: if isSignedIn() && isValidId(termId);
+      allow list: if isSignedIn() && (
+        resource.data.visibility == 'campus' ||
+        resource.data.createdByUid == request.auth.uid
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(termId) &&
+                       incoming().createdByUid == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'visibility', 'academicYear', 'semester', 'status',
+                         'totalWeeks', 'defaultPeriodsPerWeek', 'createdByUid',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'visibility', 'academicYear', 'semester', 'status',
+                         'totalWeeks', 'defaultPeriodsPerWeek', 'notes', 'createdByUid',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidAcademicTerm(incoming()) &&
+                       (
+                         isBootstrappedAdmin() ||
+                         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['PRINCIPAL', 'GUIDE', 'ADMIN'])
+                       );
+
+      allow update: if isSignedIn() &&
+                       isValidId(termId) &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().visibility == existing().visibility &&
+                       isValidAcademicTerm(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'academicYear', 'semester', 'status', 'totalWeeks',
+                         'defaultPeriodsPerWeek', 'notes', 'updatedAt'
+                       ]) &&
+                       (
+                         existing().createdByUid == request.auth.uid ||
+                         isBootstrappedAdmin() ||
+                         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['PRINCIPAL', 'ADMIN'])
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(termId) &&
+                       (
+                         existing().createdByUid == request.auth.uid ||
+                         isBootstrappedAdmin()
+                       );
+    }
+
+    // --- 4. DIGITIZED OFF-COURSE RECORDS ---
+    match /off_course_records/{recordId} {
+      allow get: if isSignedIn() &&
+                    isValidId(recordId) &&
+                    (
+                      isBootstrappedAdmin() ||
+                      existing().studentUid == request.auth.uid ||
+                      isAssignedGuide(existing()) ||
+                      isAssignedPrincipal(existing())
+                    );
+
+      allow list: if isSignedIn() && (
+        isBootstrappedAdmin() ||
+        resource.data.studentUid == request.auth.uid ||
+        (hasVerifiedEmail() && (
+          resource.data.guideEmail == request.auth.token.email ||
+          resource.data.principalEmail == request.auth.token.email
+        ))
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(recordId) &&
+                       incoming().studentUid == request.auth.uid &&
+                       incoming().guideSignatureStatus == 'PENDING' &&
+                       incoming().principalSignatureStatus == 'PENDING' &&
+                       incoming().keys().hasAll([
+                         'studentUid', 'studentEmail', 'guideEmail', 'principalEmail',
+                         'studentName', 'cicAdNo', 'classDepartment', 'academicYear',
+                         'semester', 'stream', 'collegeAfflName', 'subjectTitle',
+                         'credit', 'guideName', 'timetableSlots', 'periodsPerWeek',
+                         'guideSignatureStatus', 'principalSignatureStatus', 'recordStatus',
+                         'completedWeeksCount', 'verifiedWeeksCount', 'totalAllocatedPeriods',
+                         'totalUtilizedPeriods', 'averageFocusRating', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'studentUid', 'studentUsername', 'studentEmail',
+                         'guideUsername', 'guideEmail', 'principalEmail',
+                         'studentName', 'cicAdNo', 'clgAdNo', 'classDepartment', 'academicYear',
+                         'semester', 'stream', 'collegeAfflName', 'subjectTitle', 'proposalAppNo',
+                         'credit', 'guideName', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
+                         'timetableSlots', 'periodsPerWeek',
+                         'guideSignatureStatus', 'guideSignatureName', 'guideRemarks',
+                         'principalSignatureStatus', 'principalSignatureName', 'principalRemarks',
+                         'recordStatus', 'completedWeeksCount', 'verifiedWeeksCount',
+                         'totalAllocatedPeriods', 'totalUtilizedPeriods', 'averageFocusRating',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidOffCourseRecord(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(recordId) &&
+                       isValidOffCourseRecord(incoming()) &&
+                       incoming().studentUid == existing().studentUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Tier 0: Bootstrapped Admin Full Control
+                         (
+                           isBootstrappedAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'studentUsername', 'studentEmail', 'guideUsername', 'guideEmail',
+                             'principalEmail', 'studentName', 'cicAdNo', 'clgAdNo',
+                             'classDepartment', 'academicYear', 'semester', 'stream',
+                             'collegeAfflName', 'subjectTitle', 'proposalAppNo', 'credit',
+                             'guideName', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
+                             'timetableSlots', 'periodsPerWeek',
+                             'guideSignatureStatus', 'guideSignatureName', 'guideRemarks',
+                             'principalSignatureStatus', 'principalSignatureName', 'principalRemarks',
+                             'recordStatus', 'completedWeeksCount', 'verifiedWeeksCount',
+                             'totalAllocatedPeriods', 'totalUtilizedPeriods',
+                             'averageFocusRating', 'updatedAt'
+                           ])
+                         ) ||
+                         // Tier 1: Assigned Principal Override / Approval
+                         (
+                           isAssignedPrincipal(existing()) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'principalSignatureStatus', 'principalSignatureName', 'principalRemarks',
+                             'recordStatus', 'verifiedWeeksCount', 'updatedAt'
+                           ])
+                         ) ||
+                         // Tier 2: Assigned Guide Review & Signature
+                         (
+                           isAssignedGuide(existing()) &&
+                           existing().recordStatus != 'ARCHIVED' &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'guideSignatureStatus', 'guideSignatureName', 'guideRemarks',
+                             'verifiedWeeksCount', 'updatedAt'
+                           ])
+                         ) ||
+                         // Tier 3: Student Owner Edit & Utilization Rollup Update
+                         (
+                           existing().studentUid == request.auth.uid &&
+                           existing().recordStatus != 'ARCHIVED' &&
+                           incoming().recordStatus in ['ACTIVE', 'SUBMITTED'] &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'studentUsername', 'studentEmail', 'guideUsername', 'guideEmail',
+                             'principalEmail', 'studentName', 'cicAdNo', 'clgAdNo', 'classDepartment',
+                             'academicYear', 'semester', 'stream', 'collegeAfflName',
+                             'subjectTitle', 'proposalAppNo', 'credit', 'guideName',
+                             'guidePhone', 'guideWhatsapp', 'referenceBooks',
+                             'timetableSlots', 'periodsPerWeek', 'recordStatus',
+                             'completedWeeksCount', 'verifiedWeeksCount',
+                             'totalAllocatedPeriods', 'totalUtilizedPeriods',
+                             'averageFocusRating', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(recordId) &&
+                       (existing().studentUid == request.auth.uid || isBootstrappedAdmin());
+
+      // --- 5. WEEKLY STUDY REPORTS (WEEKS 1-18+) ---
+      match /weekly_reports/{weekId} {
+        allow get: if isSignedIn() &&
+                      isValidId(recordId) &&
+                      isValidId(weekId) &&
+                      (
+                        isBootstrappedAdmin() ||
+                        existing().studentUid == request.auth.uid ||
+                        isAssignedGuide(existing()) ||
+                        isAssignedPrincipal(existing())
+                      );
+
+        allow list: if isSignedIn() && (
+          isBootstrappedAdmin() ||
+          resource.data.studentUid == request.auth.uid ||
+          (hasVerifiedEmail() && (
+            resource.data.guideEmail == request.auth.token.email ||
+            resource.data.principalEmail == request.auth.token.email
+          ))
+        );
+
+        allow create: if isSignedIn() &&
+                         isValidId(recordId) &&
+                         isValidId(weekId) &&
+                         incoming().recordId == recordId &&
+                         incoming().studentUid == request.auth.uid &&
+                         incoming().verificationStatus == 'PENDING' &&
+                         incoming().keys().hasAll([
+                           'recordId', 'studentUid', 'guideEmail', 'principalEmail',
+                           'weekNumber', 'dateFrom', 'dateTo', 'description',
+                           'allocatedPeriods', 'utilizedPeriods', 'focusRating',
+                           'periodLogs', 'verificationStatus', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'recordId', 'studentUid', 'studentUsername',
+                           'guideUsername', 'guideEmail', 'principalEmail',
+                           'weekNumber', 'dateFrom', 'dateTo', 'description',
+                           'allocatedPeriods', 'utilizedPeriods', 'focusRating',
+                           'utilizationNotes', 'periodLogs', 'verificationStatus',
+                           'authorizedSignature', 'mentorFeedback', 'verifiedAt',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidWeeklyReport(incoming()) &&
+                         exists(/databases/$(database)/documents/off_course_records/$(recordId)) &&
+                         get(/databases/$(database)/documents/off_course_records/$(recordId)).data.studentUid == request.auth.uid;
+
+        allow update: if isSignedIn() &&
+                         isValidId(recordId) &&
+                         isValidId(weekId) &&
+                         isValidWeeklyReport(incoming()) &&
+                         incoming().recordId == existing().recordId &&
+                         incoming().studentUid == existing().studentUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           // Tier 1: Assigned Guide, Assigned Principal, or Admin Verification
+                           (
+                             (isAssignedGuide(existing()) || isAssignedPrincipal(existing()) || isBootstrappedAdmin()) &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
+                               'verifiedAt', 'updatedAt'
+                             ])
+                           ) ||
+                           // Tier 2: Student Owner Edits Report & Period Utilization
+                           (
+                             existing().studentUid == request.auth.uid &&
+                             incoming().verificationStatus in ['PENDING', 'NEEDS_REVISION'] &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'studentUsername', 'guideUsername', 'guideEmail', 'principalEmail',
+                               'weekNumber', 'dateFrom', 'dateTo',
+                               'description', 'allocatedPeriods', 'utilizedPeriods',
+                               'focusRating', 'utilizationNotes', 'periodLogs',
+                               'verificationStatus', 'updatedAt'
+                             ])
+                           )
+                         );
+
+        allow delete: if isSignedIn() &&
+                         isValidId(recordId) &&
+                         isValidId(weekId) &&
+                         (existing().studentUid == request.auth.uid || isBootstrappedAdmin());
+      }
+    }
+  }
+}

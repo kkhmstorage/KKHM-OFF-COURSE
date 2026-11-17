@@ -1,0 +1,6 @@
+{
+  "name": "KKHM Off-Course",
+  "description": "KKHM Islamic & Arts College (Affiliated to CIC) Digital Off-Course Record, Admin User & Credential Manager, Mentor Review, Period Utilization Analytics, and Principal Oversight System.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
