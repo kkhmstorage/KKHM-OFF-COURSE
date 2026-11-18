@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import com.example.data.model.CIC_DAYS
 import com.example.data.model.CIC_PERIODS
 import com.example.data.model.OffCourseRecord
+import com.example.data.model.PeriodLogEntry
 import com.example.data.model.WeeklyStudyReport
 import java.io.File
 import java.io.FileOutputStream
@@ -324,7 +325,18 @@ object OffCoursePdfExporter {
                 canvas.drawText(utilLine, margin + wWeek + wFrom + wTo + 6f, y + 16f, labelPaint)
 
                 val descX = margin + wWeek + wFrom + wTo + 6f
-                drawWrappedText(canvas, r.description, descX, y + 30f, wDesc - 12f, 12f, 3, bodyPaint)
+                val decodedPeriods = r.periodLogs.mapNotNull { PeriodLogEntry.decode(it) }
+                val periodNoteSummary = decodedPeriods
+                    .filter { it.note.isNotBlank() }
+                    .joinToString("; ") { "${it.day.take(3)} P${it.period}(${it.effectiveness.take(3)}): ${it.note}" }
+                val combinedText = buildString {
+                    if (r.description.isNotBlank()) append(r.description.trim())
+                    if (periodNoteSummary.isNotBlank() && periodNoteSummary != r.description.trim()) {
+                        if (isNotEmpty()) append(" | ")
+                        append(periodNoteSummary)
+                    }
+                }.ifBlank { "Completed off-course study periods" }
+                drawWrappedText(canvas, combinedText, descX, y + 30f, wDesc - 12f, 11f, 3, bodyPaint)
 
                 val sigX = margin + wWeek + wFrom + wTo + wDesc + 6f
                 canvas.drawText(r.verificationStatus, sigX, y + 28f, labelPaint)

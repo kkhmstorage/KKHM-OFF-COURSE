@@ -5,12 +5,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,26 +17,42 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.SystemUpdateAlt
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,9 +75,12 @@ import com.example.data.model.CIC_PERIODS
 import com.example.data.model.CicStream
 import com.example.data.model.DarkModePreference
 import com.example.data.model.OffCourseRecord
+import com.example.data.model.PeriodLogEntry
 import com.example.data.model.SignatureStatus
+import com.example.data.model.TermStatus
 import com.example.data.model.WeekVerificationStatus
 import com.example.data.model.WeeklyStudyReport
+import com.example.data.remote.RemoteAppRelease
 import com.example.ui.theme.PendingAmber
 import com.example.ui.theme.VerifiedGreen
 
@@ -463,7 +479,7 @@ fun TimetableMatrixGrid(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AcademicTermFilterBar(
     terms: List<AcademicTerm>,
@@ -474,52 +490,187 @@ fun AcademicTermFilterBar(
     onSelectSemester: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val years = (terms.map { it.academicYear } + records.map { it.academicYear })
-        .filter { it.isNotBlank() }
+    val years = (terms.map { it.academicYear } + records.map { it.academicYear } + listOf(selectedYear))
+        .filter { it.isNotBlank() && it != "ALL" }
         .distinct()
         .sortedDescending()
-    val semesters = (terms.map { it.semester } + records.map { it.semester } + listOf("Nov", "May"))
-        .filter { it.isNotBlank() }
+    val semesters = (terms.map { it.semester } + records.map { it.semester } + listOf("Nov", "May", selectedSemester))
+        .filter { it.isNotBlank() && it != "ALL" }
         .distinct()
 
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+    var yearExpanded by remember { mutableStateOf(false) }
+    var semExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = yearExpanded,
+            onExpandedChange = { yearExpanded = !yearExpanded },
+            modifier = Modifier.weight(1.2f)
         ) {
-            FilterChip(
-                selected = selectedYear == "ALL",
-                onClick = { onSelectYear("ALL") },
-                label = { Text("All Years") },
-                modifier = Modifier.testTag("filter_year_all")
+            OutlinedTextField(
+                value = if (selectedYear == "ALL") "All Years" else selectedYear,
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                label = { Text("Academic Year") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = yearExpanded) },
+                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .testTag("dropdown_academic_year")
             )
-            years.forEach { year ->
-                val isArchived = terms.any { it.academicYear == year && it.status == "ARCHIVED" }
-                FilterChip(
-                    selected = selectedYear == year,
-                    onClick = { onSelectYear(year) },
-                    label = { Text(if (isArchived) "$year (Archive)" else year) }
+            ExposedDropdownMenu(
+                expanded = yearExpanded,
+                onDismissRequest = { yearExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("All Years") },
+                    onClick = {
+                        onSelectYear("ALL")
+                        yearExpanded = false
+                    },
+                    modifier = Modifier.testTag("filter_year_all")
                 )
+                years.forEach { year ->
+                    val statusTag = when {
+                        terms.any { it.academicYear == year && it.status == TermStatus.ACTIVE.name } -> " • Active"
+                        terms.any { it.academicYear == year && it.status == TermStatus.ARCHIVED.name } -> " • Archive"
+                        else -> ""
+                    }
+                    DropdownMenuItem(
+                        text = { Text("$year$statusTag") },
+                        onClick = {
+                            onSelectYear(year)
+                            yearExpanded = false
+                        }
+                    )
+                }
             }
         }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+
+        ExposedDropdownMenuBox(
+            expanded = semExpanded,
+            onExpandedChange = { semExpanded = !semExpanded },
+            modifier = Modifier.weight(0.95f)
         ) {
-            FilterChip(
-                selected = selectedSemester == "ALL",
-                onClick = { onSelectSemester("ALL") },
-                label = { Text("All Semesters") },
-                modifier = Modifier.testTag("filter_sem_all")
+            OutlinedTextField(
+                value = if (selectedSemester == "ALL") "All Sem." else selectedSemester,
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                label = { Text("Semester") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = semExpanded) },
+                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .testTag("dropdown_semester")
             )
-            semesters.forEach { sem ->
-                FilterChip(
-                    selected = selectedSemester == sem,
-                    onClick = { onSelectSemester(sem) },
-                    label = { Text(sem) }
+            ExposedDropdownMenu(
+                expanded = semExpanded,
+                onDismissRequest = { semExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("All Semesters") },
+                    onClick = {
+                        onSelectSemester("ALL")
+                        semExpanded = false
+                    },
+                    modifier = Modifier.testTag("filter_sem_all")
                 )
+                semesters.forEach { sem ->
+                    DropdownMenuItem(
+                        text = { Text(sem) },
+                        onClick = {
+                            onSelectSemester(sem)
+                            semExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PeriodLogsBreakdown(
+    periodLogs: List<String>,
+    modifier: Modifier = Modifier
+) {
+    val entries = periodLogs.mapNotNull { PeriodLogEntry.decode(it) }
+    if (entries.isEmpty()) return
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = "Period-by-Period Activity Log",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        entries.forEach { entry ->
+            val (badgeBg, badgeFg) = when (entry.effectiveness.uppercase()) {
+                "EFFECTIVE" -> VerifiedGreen.copy(alpha = 0.16f) to VerifiedGreen
+                "PARTIAL" -> PendingAmber.copy(alpha = 0.16f) to PendingAmber
+                else -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
+            }
+            val statusLabel = when (entry.effectiveness.uppercase()) {
+                "EFFECTIVE" -> "Effective (${entry.minutes}m)"
+                "PARTIAL" -> "Partial (${entry.minutes}m)"
+                else -> "Missed"
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "${entry.day} • Period ${entry.period}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        StatusBadge(
+                            text = statusLabel,
+                            containerColor = badgeBg,
+                            contentColor = badgeFg
+                        )
+                    }
+                    Text(
+                        text = entry.note.ifBlank {
+                            if (entry.effectiveness == "MISSED") "Period marked as missed."
+                            else "Completed scheduled off-course study period."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (entry.note.isNotBlank()) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -553,6 +704,139 @@ fun signatureStatusColors(status: String): Pair<Color, Color> = when (SignatureS
     SignatureStatus.APPROVED -> VerifiedGreen.copy(alpha = 0.16f) to VerifiedGreen
     SignatureStatus.REVISION_REQUIRED -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
     SignatureStatus.PENDING -> PendingAmber.copy(alpha = 0.16f) to PendingAmber
+}
+
+@Composable
+fun AppUpdateBanner(
+    release: RemoteAppRelease,
+    onOpenDetails: () -> Unit,
+    onDownloadClick: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onOpenDetails,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("app_update_banner")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.SystemUpdateAlt,
+                contentDescription = "Update available",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Update v${release.versionName} Available",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = release.releaseNotes.ifBlank { "Tap to download the latest KKHM Off-Course APK." },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            FilledTonalButton(
+                onClick = onDownloadClick,
+                modifier = Modifier.testTag("banner_download_update_button")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Update")
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("banner_dismiss_update_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss update banner",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AppUpdateDetailsDialog(
+    release: RemoteAppRelease,
+    currentVersionName: String,
+    currentVersionCode: Int,
+    onDismiss: () -> Unit,
+    onDownloadApk: () -> Unit,
+    onOpenReleasePage: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.SystemUpdateAlt, contentDescription = null) },
+        title = { Text("Update v${release.versionName} Available") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Installed: v$currentVersionName (Code $currentVersionCode)\nLatest on GitHub: v${release.versionName} (Code ${release.versionCode})",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (release.releaseNotes.isNotBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = release.releaseNotes,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "Tap Download APK to fetch the latest release in your browser and install over the existing app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDownloadApk,
+                modifier = Modifier.testTag("dialog_download_apk_button")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Download APK")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = onOpenReleasePage) {
+                    Text("Release Page")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Later")
+                }
+            }
+        }
+    )
 }
 
 @Composable

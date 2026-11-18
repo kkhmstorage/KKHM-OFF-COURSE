@@ -35,11 +35,35 @@ service cloud.firestore {
              request.auth.token.email == 'kkhmstorage@gmail.com';
     }
 
+    function callerPortalUsername() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('portalUsername', '')
+        : '';
+    }
+
     function isAssignedGuide(data) {
-      return hasVerifiedEmail() &&
-             data.guideEmail is string &&
-             data.guideEmail.size() > 0 &&
-             data.guideEmail == request.auth.token.email;
+      return (hasVerifiedEmail() &&
+              data.guideEmail is string &&
+              data.guideEmail.size() > 0 &&
+              data.guideEmail == request.auth.token.email) ||
+             (isSignedIn() &&
+              'guideUsername' in data &&
+              data.guideUsername is string &&
+              data.guideUsername.size() > 0 &&
+              callerPortalUsername() != '' &&
+              data.guideUsername == callerPortalUsername());
+    }
+
+    function isAssignedStudentOwner(data) {
+      return isSignedIn() && (
+        data.studentUid == request.auth.uid ||
+        ('studentUsername' in data &&
+         data.studentUsername is string &&
+         data.studentUsername.size() > 0 &&
+         callerPortalUsername() != '' &&
+         data.studentUsername == callerPortalUsername())
+      );
     }
 
     function isAssignedPrincipal(data) {
@@ -49,6 +73,18 @@ service cloud.firestore {
              data.principalEmail == request.auth.token.email;
     }
 
+    function isValidPortalBinding(username) {
+      return username == '' ||
+             (username is string &&
+              username.size() >= 3 &&
+              username.size() <= 40 &&
+              username.matches('^[a-z0-9_\\-]+$') &&
+              exists(/databases/$(database)/documents/college_accounts/$(username)) &&
+              get(/databases/$(database)/documents/college_accounts/$(username)).data.accountStatus == 'ACTIVE' &&
+              (get(/databases/$(database)/documents/college_accounts/$(username)).data.boundUid == request.auth.uid ||
+               isBootstrappedAdmin()));
+    }
+
     // --- VALIDATION BLUEPRINTS ---
     function isValidUserProfile(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
@@ -56,6 +92,7 @@ service cloud.firestore {
              data.email is string && data.email.size() <= 120 &&
              data.role in ['STUDENT', 'GUIDE', 'PRINCIPAL', 'ADMIN'] &&
              data.darkModePreference in ['SYSTEM', 'LIGHT', 'DARK'] &&
+             (!('portalUsername' in data) || isValidPortalBinding(data.portalUsername)) &&
              (!('cicAdNo' in data) || (data.cicAdNo is string && data.cicAdNo.size() <= 40)) &&
              (!('clgAdNo' in data) || (data.clgAdNo is string && data.clgAdNo.size() <= 40)) &&
              (!('classDepartment' in data) || (data.classDepartment is string && data.classDepartment.size() <= 80)) &&
@@ -176,7 +213,7 @@ service cloud.firestore {
                        incoming().role != 'ADMIN' &&
                        incoming().keys().hasAll(['userId', 'displayName', 'email', 'role', 'darkModePreference', 'createdAt', 'updatedAt']) &&
                        incoming().keys().hasOnly([
-                         'userId', 'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
+                         'userId', 'portalUsername', 'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
                          'classDepartment', 'stream', 'collegeAfflName', 'phone', 'whatsapp',
                          'darkModePreference', 'createdAt', 'updatedAt'
                        ]) &&
@@ -190,7 +227,7 @@ service cloud.firestore {
                        (incoming().role == existing().role || incoming().role != 'ADMIN') &&
                        isValidUserProfile(incoming()) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
+                         'portalUsername', 'displayName', 'email', 'role', 'cicAdNo', 'clgAdNo',
                          'classDepartment', 'stream', 'collegeAfflName', 'phone', 'whatsapp',
                          'darkModePreference', 'updatedAt'
                        ]);
@@ -200,7 +237,7 @@ service cloud.firestore {
 
     // --- 2. ADMIN-ISSUED COLLEGE ACCOUNTS (USERNAME & PASSWORD) ---
     match /college_accounts/{username} {
-      // Single-document lookup for credential verification
+      // Single-document lookup for credential verification & guide profile auto-fill
       allow get: if isSignedIn() && isValidId(username);
 
       // List access strictly scoped to Admin or user's own created/bound accounts
@@ -247,9 +284,10 @@ service cloud.firestore {
                              'assignedGuideUsername', 'phone', 'boundUid', 'updatedAt'
                            ])
                          ) ||
-                         // Tier 2: Account owner binding their UID on first credential login
+                         // Tier 2: Account owner binding their UID on first real user login
+                         // (also allows claiming if previously only tested by creator admin UID)
                          (
-                           existing().boundUid == '' &&
+                           (existing().boundUid == '' || existing().boundUid == existing().createdByUid) &&
                            incoming().boundUid == request.auth.uid &&
                            incoming().diff(existing()).affectedKeys().hasOnly(['boundUid', 'updatedAt'])
                          )
@@ -319,7 +357,7 @@ service cloud.firestore {
                     isValidId(recordId) &&
                     (
                       isBootstrappedAdmin() ||
-                      existing().studentUid == request.auth.uid ||
+                      isAssignedStudentOwner(existing()) ||
                       isAssignedGuide(existing()) ||
                       isAssignedPrincipal(existing())
                     );
@@ -330,6 +368,10 @@ service cloud.firestore {
         (hasVerifiedEmail() && (
           resource.data.guideEmail == request.auth.token.email ||
           resource.data.principalEmail == request.auth.token.email
+        )) ||
+        (callerPortalUsername() != '' && (
+          resource.data.guideUsername == callerPortalUsername() ||
+          resource.data.studentUsername == callerPortalUsername()
         ))
       );
 
@@ -404,7 +446,7 @@ service cloud.firestore {
                          ) ||
                          // Tier 3: Student Owner Edit & Utilization Rollup Update
                          (
-                           existing().studentUid == request.auth.uid &&
+                           isAssignedStudentOwner(existing()) &&
                            existing().recordStatus != 'ARCHIVED' &&
                            incoming().recordStatus in ['ACTIVE', 'SUBMITTED'] &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
@@ -432,7 +474,7 @@ service cloud.firestore {
                       isValidId(weekId) &&
                       (
                         isBootstrappedAdmin() ||
-                        existing().studentUid == request.auth.uid ||
+                        isAssignedStudentOwner(existing()) ||
                         isAssignedGuide(existing()) ||
                         isAssignedPrincipal(existing())
                       );
@@ -443,6 +485,10 @@ service cloud.firestore {
           (hasVerifiedEmail() && (
             resource.data.guideEmail == request.auth.token.email ||
             resource.data.principalEmail == request.auth.token.email
+          )) ||
+          (callerPortalUsername() != '' && (
+            resource.data.guideUsername == callerPortalUsername() ||
+            resource.data.studentUsername == callerPortalUsername()
           ))
         );
 
@@ -469,7 +515,7 @@ service cloud.firestore {
                          ]) &&
                          isValidWeeklyReport(incoming()) &&
                          exists(/databases/$(database)/documents/off_course_records/$(recordId)) &&
-                         get(/databases/$(database)/documents/off_course_records/$(recordId)).data.studentUid == request.auth.uid;
+                         isAssignedStudentOwner(get(/databases/$(database)/documents/off_course_records/$(recordId)).data);
 
         allow update: if isSignedIn() &&
                          isValidId(recordId) &&
@@ -479,9 +525,18 @@ service cloud.firestore {
                          incoming().studentUid == existing().studentUid &&
                          incoming().createdAt == existing().createdAt &&
                          (
-                           // Tier 1: Assigned Guide, Assigned Principal, or Admin Verification
+                           // Tier 0: Bootstrapped Admin Full Verification or Guide Reassignment Sync
                            (
-                             (isAssignedGuide(existing()) || isAssignedPrincipal(existing()) || isBootstrappedAdmin()) &&
+                             isBootstrappedAdmin() &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'guideUsername', 'guideEmail', 'principalEmail',
+                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
+                               'verifiedAt', 'updatedAt'
+                             ])
+                           ) ||
+                           // Tier 1: Assigned Guide or Assigned Principal Verification
+                           (
+                             (isAssignedGuide(existing()) || isAssignedPrincipal(existing())) &&
                              incoming().diff(existing()).affectedKeys().hasOnly([
                                'verificationStatus', 'authorizedSignature', 'mentorFeedback',
                                'verifiedAt', 'updatedAt'
@@ -489,7 +544,7 @@ service cloud.firestore {
                            ) ||
                            // Tier 2: Student Owner Edits Report & Period Utilization
                            (
-                             existing().studentUid == request.auth.uid &&
+                             isAssignedStudentOwner(existing()) &&
                              incoming().verificationStatus in ['PENDING', 'NEEDS_REVISION'] &&
                              incoming().diff(existing()).affectedKeys().hasOnly([
                                'studentUsername', 'guideUsername', 'guideEmail', 'principalEmail',

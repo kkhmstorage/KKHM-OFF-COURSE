@@ -103,10 +103,43 @@ jobs:
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon
 
-      - name: Package APK for download
+      - name: Package APK & update metadata
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/KKHM-Off-Course-debug.apk
+          COMMIT_MSG=$(git log -1 --pretty=%s || echo "Latest update")
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
+          VERSION_CODE=$((2 + RUN_NUM))
+          VERSION_NAME="1.1.${RUN_NUM}"
+          PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/latest/KKHM-Off-Course-debug.apk"
+          RELEASE_PAGE_URL="https://github.com/${{ github.repository }}/releases/tag/latest"
+
+          python3 -c '
+          import json, sys
+          version_code, version_name, run_num, short_sha, commit_msg, published_at, apk_url, release_page_url = sys.argv[1:9]
+          data = {
+              "versionCode": int(version_code),
+              "versionName": version_name,
+              "buildNumber": int(run_num),
+              "commitSha": short_sha,
+              "releaseNotes": commit_msg,
+              "publishedAt": published_at,
+              "apkUrl": apk_url,
+              "releasePageUrl": release_page_url,
+          }
+          with open("dist/version.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+          notes = (
+              f"### KKHM Off-Course v{version_name} (Build {run_num})\n\n"
+              f"- **Commit:** `{short_sha}` — {commit_msg}\n"
+              f"- **Version Code:** `{version_code}`\n"
+              f"- **Published:** {published_at}\n"
+          )
+          with open("dist/release_notes.md", "w", encoding="utf-8") as f:
+              f.write(notes)
+          ' "$VERSION_CODE" "$VERSION_NAME" "$RUN_NUM" "$SHORT_SHA" "$COMMIT_MSG" "$PUBLISHED_AT" "$APK_URL" "$RELEASE_PAGE_URL"
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
@@ -115,14 +148,19 @@ jobs:
           path: dist/KKHM-Off-Course-debug.apk
           retention-days: 30
 
-      - name: Publish Debug APK to latest GitHub Release
+      - name: Publish Debug APK & version.json to latest GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
+          VERSION_NAME="1.1.${RUN_NUM}"
           if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest dist/KKHM-Off-Course-debug.apk --clobber
+            gh release upload latest dist/KKHM-Off-Course-debug.apk dist/version.json --clobber
+            gh release edit latest \
+              --title "KKHM Off-Course v${VERSION_NAME} (Build ${RUN_NUM})" \
+              --notes-file dist/release_notes.md
           else
-            gh release create latest dist/KKHM-Off-Course-debug.apk \
-              --title "KKHM Off-Course (Latest Debug APK)" \
-              --notes "Latest Android Debug APK for KKHM Islamic & Arts College."
+            gh release create latest dist/KKHM-Off-Course-debug.apk dist/version.json \
+              --title "KKHM Off-Course v${VERSION_NAME} (Build ${RUN_NUM})" \
+              --notes-file dist/release_notes.md
           fi

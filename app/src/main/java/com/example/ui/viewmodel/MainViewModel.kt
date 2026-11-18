@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.local.NotificationPreferences
 import com.example.data.local.PreferencesManager
 import com.example.data.model.AcademicTerm
@@ -19,11 +20,15 @@ import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.data.model.WeekVerificationStatus
 import com.example.data.model.WeeklyStudyReport
+import com.example.data.remote.AppUpdateHelper
+import com.example.data.remote.AppUpdateRepository
 import com.example.data.remote.BulkImportRow
 import com.example.data.remote.BulkImportUiState
 import com.example.data.remote.CollegeAccountRepository
 import com.example.data.remote.OffCourseRepository
+import com.example.data.remote.RemoteAppRelease
 import com.example.data.remote.SeededCredential
+import com.example.data.remote.UpdateCheckUiState
 import com.example.notifications.PeriodNotificationScheduler
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -37,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -57,14 +63,9 @@ class MainViewModel(
     private val notificationScheduler: PeriodNotificationScheduler,
     private val currentUserId: String,
     private val currentUserEmail: String,
-    private val currentUserName: String
+    private val currentUserName: String,
+    private val updateRepository: AppUpdateRepository = AppUpdateRepository()
 ) : ViewModel() {
-
-    private val _selectedAcademicYear = MutableStateFlow("ALL")
-    val selectedAcademicYear: StateFlow<String> = _selectedAcademicYear.asStateFlow()
-
-    private val _selectedSemester = MutableStateFlow("ALL")
-    val selectedSemester: StateFlow<String> = _selectedSemester.asStateFlow()
 
     private val _selectedRecordId = MutableStateFlow<String?>(null)
     val selectedRecordId: StateFlow<String?> = _selectedRecordId.asStateFlow()
@@ -83,6 +84,44 @@ class MainViewModel(
 
     private val _isActionInProgress = MutableStateFlow(false)
     val isActionInProgress: StateFlow<Boolean> = _isActionInProgress.asStateFlow()
+
+    private val _remoteRelease = MutableStateFlow<RemoteAppRelease?>(null)
+    private val _isCheckingUpdate = MutableStateFlow(false)
+    private val _updateError = MutableStateFlow<String?>(null)
+
+    val updateState: StateFlow<UpdateCheckUiState> = combine(
+        _isCheckingUpdate,
+        _remoteRelease,
+        _updateError,
+        preferencesManager.skippedUpdateVersionFlow
+    ) { checking, release, error, skippedVersion ->
+        when {
+            checking -> UpdateCheckUiState.Checking
+            release != null -> {
+                val hasUpdate = AppUpdateHelper.isUpdateAvailable(
+                    localVersionCode = BuildConfig.VERSION_CODE,
+                    localBuildNumber = BuildConfig.CI_RUN_NUMBER,
+                    localCommitSha = BuildConfig.BUILD_COMMIT_SHA,
+                    remote = release
+                )
+                if (hasUpdate) {
+                    UpdateCheckUiState.UpdateAvailable(
+                        release = release,
+                        currentVersionName = BuildConfig.VERSION_NAME,
+                        currentVersionCode = BuildConfig.VERSION_CODE,
+                        isDismissedBanner = skippedVersion >= release.versionCode
+                    )
+                } else {
+                    UpdateCheckUiState.UpToDate(
+                        currentVersionName = BuildConfig.VERSION_NAME,
+                        currentVersionCode = BuildConfig.VERSION_CODE
+                    )
+                }
+            }
+            error != null -> UpdateCheckUiState.Error(error)
+            else -> UpdateCheckUiState.Idle
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UpdateCheckUiState.Idle)
 
     val isBootstrappedAdminDevice: Boolean = accountRepository.isBootstrappedAdminDevice()
 
@@ -106,6 +145,7 @@ class MainViewModel(
                         if (account == null || account.accountStatus == AccountStatus.SUSPENDED.name) {
                             UiState.Success(null)
                         } else {
+                            accountRepository.syncActiveAccountSession(account)
                             UiState.Success(account)
                         }
                     }
@@ -118,6 +158,16 @@ class MainViewModel(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
+
+    val assignedGuideAccount: StateFlow<CollegeAccount?> = activeAccountState
+        .flatMapLatest { accState ->
+            val guideUser = (accState as? UiState.Success)?.data?.assignedGuideUsername.orEmpty().trim()
+            if (guideUser.isBlank()) flowOf<CollegeAccount?>(null)
+            else flow<CollegeAccount?> {
+                emit(accountRepository.getAccountByUsername(guideUser))
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     val activeRole: StateFlow<UserRole> = activeAccountState
         .map { state ->
@@ -145,6 +195,32 @@ class MainViewModel(
             emit(UiState.Error((fsErr ?: error).message ?: "Failed to load academic terms"))
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
+
+    val selectedAcademicYear: StateFlow<String> = combine(
+        preferencesManager.selectedAcademicYearFlow,
+        academicTermsState
+    ) { saved, termsUi ->
+        if (!saved.isNullOrBlank()) {
+            saved
+        } else {
+            val terms = (termsUi as? UiState.Success)?.data.orEmpty()
+            val active = terms.firstOrNull { it.status == TermStatus.ACTIVE.name }
+            active?.academicYear ?: "2026 - 2027"
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), "2026 - 2027")
+
+    val selectedSemester: StateFlow<String> = combine(
+        preferencesManager.selectedSemesterFlow,
+        academicTermsState
+    ) { saved, termsUi ->
+        if (!saved.isNullOrBlank()) {
+            saved
+        } else {
+            val terms = (termsUi as? UiState.Success)?.data.orEmpty()
+            val active = terms.firstOrNull { it.status == TermStatus.ACTIVE.name }
+            active?.semester ?: "Nov"
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), "Nov")
 
     val collegeAccountsState: StateFlow<UiState<List<CollegeAccount>>> = activeRole
         .flatMapLatest { role ->
@@ -242,13 +318,24 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Success(null))
 
     val weeklyReportsState: StateFlow<UiState<List<WeeklyStudyReport>>> =
-        combine(_selectedRecordId, activeRole, selectedRecordState) { recordId, role, recordState ->
-            Triple(recordId, role, (recordState as? UiState.Success)?.data)
-        }.flatMapLatest { (recordId, role, record) ->
-            if (recordId.isNullOrBlank() || record == null) {
+        combine(_selectedRecordId, activeAccountState, selectedRecordState) { recordId, accState, recordState ->
+            Triple(
+                recordId,
+                (accState as? UiState.Success)?.data,
+                (recordState as? UiState.Success)?.data
+            )
+        }.flatMapLatest { (recordId, account, record) ->
+            if (recordId.isNullOrBlank() || record == null || account == null) {
                 flowOf(UiState.Success(emptyList()))
             } else {
-                repository.observeWeeklyReports(recordId, role, record.studentUid)
+                val role = UserRole.fromRaw(account.role)
+                repository.observeWeeklyReports(
+                    recordId = recordId,
+                    role = role,
+                    studentUid = record.studentUid,
+                    guideUsername = if (role == UserRole.GUIDE) account.username else record.guideUsername,
+                    studentUsername = if (role == UserRole.STUDENT) account.username else record.studentUsername
+                )
                     .map<List<WeeklyStudyReport>, UiState<List<WeeklyStudyReport>>> { UiState.Success(it) }
                     .catch { error ->
                         val fsErr = error.rootFirestoreError()
@@ -270,6 +357,46 @@ class MainViewModel(
                     alertMinute = prefs.alertMinute
                 )
             }
+        }
+        checkForAppUpdate(silent = true)
+    }
+
+    fun checkForAppUpdate(silent: Boolean = false) {
+        if (_isCheckingUpdate.value) return
+        viewModelScope.launch {
+            _isCheckingUpdate.value = true
+            _updateError.value = null
+            val res = updateRepository.fetchLatestRelease()
+            res.onSuccess { release ->
+                _remoteRelease.value = release
+                val hasUpdate = AppUpdateHelper.isUpdateAvailable(
+                    localVersionCode = BuildConfig.VERSION_CODE,
+                    localBuildNumber = BuildConfig.CI_RUN_NUMBER,
+                    localCommitSha = BuildConfig.BUILD_COMMIT_SHA,
+                    remote = release
+                )
+                if (!silent) {
+                    if (hasUpdate) {
+                        preferencesManager.setSkippedUpdateVersion(0)
+                        _snackbarEvents.emit("New update v${release.versionName} is ready to download!")
+                    } else {
+                        _snackbarEvents.emit("You are already on the latest version (v${BuildConfig.VERSION_NAME}).")
+                    }
+                }
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "Unable to check GitHub Releases."
+                if (!silent) {
+                    _updateError.value = msg
+                    _snackbarEvents.emit("Update check failed: $msg")
+                }
+            }
+            _isCheckingUpdate.value = false
+        }
+    }
+
+    fun dismissUpdateBanner(versionCode: Int) {
+        viewModelScope.launch {
+            preferencesManager.setSkippedUpdateVersion(versionCode)
         }
     }
 
@@ -449,8 +576,21 @@ class MainViewModel(
         }
     }
 
-    fun selectAcademicYear(year: String) { _selectedAcademicYear.value = year }
-    fun selectSemester(semester: String) { _selectedSemester.value = semester }
+    fun selectAcademicYear(year: String) {
+        viewModelScope.launch {
+            preferencesManager.setSelectedAcademicYear(year)
+        }
+    }
+
+    fun selectSemester(semester: String) {
+        viewModelScope.launch {
+            preferencesManager.setSelectedSemester(semester)
+        }
+    }
+
+    suspend fun lookupGuideAccount(username: String): CollegeAccount? =
+        accountRepository.getAccountByUsername(username)
+
     fun selectRecord(recordId: String?) { _selectedRecordId.value = recordId }
 
     fun setDarkMode(preference: DarkModePreference) {
@@ -486,7 +626,7 @@ class MainViewModel(
         viewModelScope.launch {
             _isActionInProgress.value = true
             val account = (activeAccountState.value as? UiState.Success)?.data
-            val enriched = if (record.id.isBlank() && account != null) {
+            val enriched = if (account != null) {
                 record.copy(
                     studentUsername = record.studentUsername.ifBlank { account.username },
                     guideUsername = record.guideUsername.ifBlank { account.assignedGuideUsername }
@@ -496,6 +636,16 @@ class MainViewModel(
             }
             val result = repository.saveOffCourseRecord(enriched)
             result.onSuccess { id ->
+                if (enriched.academicYear.isNotBlank() && selectedAcademicYear.value != "ALL" &&
+                    selectedAcademicYear.value != enriched.academicYear
+                ) {
+                    preferencesManager.setSelectedAcademicYear(enriched.academicYear)
+                }
+                if (enriched.semester.isNotBlank() && selectedSemester.value != "ALL" &&
+                    selectedSemester.value != enriched.semester
+                ) {
+                    preferencesManager.setSelectedSemester(enriched.semester)
+                }
                 _snackbarEvents.emit("Off-Course Record saved")
                 onSaved(id)
             }.onFailure { err ->

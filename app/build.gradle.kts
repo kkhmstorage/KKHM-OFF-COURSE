@@ -13,11 +13,16 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
+    val ciRunNumber = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 0
+    val ciCommitSha = providers.environmentVariable("GITHUB_SHA").orNull?.take(7).orEmpty()
     applicationId = "com.aistudio.cicoffcourse.mvrkpt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2 + ciRunNumber
+    versionName = if (ciRunNumber > 0) "1.1.$ciRunNumber" else "1.1"
+
+    buildConfigField("int", "CI_RUN_NUMBER", "$ciRunNumber")
+    buildConfigField("String", "BUILD_COMMIT_SHA", "\"$ciCommitSha\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -273,3 +273,142 @@ test("Off-Course Record & Weekly Reports: Student, Guide, Admin isolation & veri
   await assertFails(otherDb.collection("off_course_records").doc(recordId).get());
   await assertFails(otherDb.collection("off_course_records").get());
 });
+
+test("Guide sees records assigned via guideUsername even when guideEmail is empty; rogue cannot hijack portalUsername", async () => {
+  const now = new Date(Date.now() - 5000);
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentDb = testEnv.authenticatedContext(STUDENT_UID, {
+    email: "ali@student.edu",
+    email_verified: true,
+  }).firestore();
+  const guideDb = testEnv.authenticatedContext(GUIDE_UID, {
+    email: "teacher.personal@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const rogueDb = testEnv.authenticatedContext(OTHER_STUDENT_UID, {
+    email: "omar@student.edu",
+    email_verified: true,
+  }).firestore();
+
+  // Admin creates guide1 account
+  await assertSucceeds(
+    adminDb.collection("college_accounts").doc("guide1").set({
+      username: "guide1",
+      displayName: "Usthad Abdul Rahman",
+      role: "GUIDE",
+      passwordSalt: "salt_guide_1234",
+      passwordHash: "c".repeat(64),
+      accountStatus: "ACTIVE",
+      cicAdNo: "",
+      classDepartment: "Faculty",
+      stream: "",
+      assignedGuideUsername: "",
+      phone: "+919800000001",
+      boundUid: "",
+      createdByUid: ADMIN_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Guide binds UID on college_accounts/guide1 and sets verified portalUsername in users/{guideUid}
+  await assertSucceeds(
+    guideDb.collection("college_accounts").doc("guide1").update({
+      boundUid: GUIDE_UID,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+  await assertSucceeds(
+    guideDb.collection("users").doc(GUIDE_UID).set({
+      userId: GUIDE_UID,
+      portalUsername: "guide1",
+      displayName: "Usthad Abdul Rahman",
+      email: "teacher.personal@gmail.com",
+      role: "GUIDE",
+      darkModePreference: "SYSTEM",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Rogue user cannot hijack portalUsername = guide1
+  await assertFails(
+    rogueDb.collection("users").doc(OTHER_STUDENT_UID).set({
+      userId: OTHER_STUDENT_UID,
+      portalUsername: "guide1",
+      displayName: "Rogue",
+      email: "omar@student.edu",
+      role: "GUIDE",
+      darkModePreference: "SYSTEM",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Student submits record with guideUsername = "guide1" and EMPTY guideEmail
+  const payload = buildRecordPayload(now);
+  payload.guideUsername = "guide1";
+  payload.guideEmail = "";
+  const recordId = "rec_username_only_guide";
+  await assertSucceeds(
+    studentDb.collection("off_course_records").doc(recordId).set(payload)
+  );
+  await assertSucceeds(
+    studentDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .doc("week_01")
+      .set({
+        recordId: recordId,
+        studentUid: STUDENT_UID,
+        studentUsername: "ali_wafy",
+        guideUsername: "guide1",
+        guideEmail: "",
+        principalEmail: ADMIN_EMAIL,
+        weekNumber: 1,
+        dateFrom: "02/11/2026",
+        dateTo: "08/11/2026",
+        description: "Mon P2: Studied Kitab al-Ilm",
+        allocatedPeriods: 2,
+        utilizedPeriods: 2,
+        focusRating: 5,
+        utilizationNotes: "Done",
+        periodLogs: ["Monday|P2|EFFECTIVE|45m|Studied Kitab al-Ilm"],
+        verificationStatus: "PENDING",
+        createdAt: now,
+        updatedAt: now,
+      })
+  );
+
+  // Guide can list, read, and verify both record & weekly_reports using guideUsername query!
+  await assertSucceeds(
+    guideDb.collection("off_course_records").where("guideUsername", "==", "guide1").get()
+  );
+  await assertSucceeds(
+    guideDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .where("guideUsername", "==", "guide1")
+      .get()
+  );
+  await assertSucceeds(
+    guideDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .doc("week_01")
+      .update({
+        verificationStatus: "VERIFIED",
+        authorizedSignature: "Usthad Abdul Rahman",
+        mentorFeedback: "Clear period log!",
+        verifiedAt: new Date(Date.now() - 500),
+        updatedAt: new Date(Date.now() - 500),
+      })
+  );
+});
+

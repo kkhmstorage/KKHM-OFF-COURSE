@@ -27,6 +27,9 @@ class PreferencesManager(private val context: Context) {
         val ALERT_HOUR = intPreferencesKey("period_alert_hour")
         val ALERT_MINUTE = intPreferencesKey("period_alert_minute")
         val LOGGED_IN_USERNAME = stringPreferencesKey("logged_in_portal_username")
+        val SELECTED_ACADEMIC_YEAR = stringPreferencesKey("selected_academic_year")
+        val SELECTED_SEMESTER = stringPreferencesKey("selected_semester")
+        val SKIPPED_UPDATE_VERSION_CODE = intPreferencesKey("skipped_update_version_code")
     }
 
     val darkModeFlow: Flow<DarkModePreference> = context.dataStore.data.map { prefs ->
@@ -35,6 +38,18 @@ class PreferencesManager(private val context: Context) {
 
     val loggedInUsernameFlow: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[Keys.LOGGED_IN_USERNAME]?.takeIf { it.isNotBlank() }
+    }
+
+    val selectedAcademicYearFlow: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[Keys.SELECTED_ACADEMIC_YEAR]?.takeIf { it.isNotBlank() }
+    }
+
+    val selectedSemesterFlow: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[Keys.SELECTED_SEMESTER]?.takeIf { it.isNotBlank() }
+    }
+
+    val skippedUpdateVersionFlow: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[Keys.SKIPPED_UPDATE_VERSION_CODE] ?: 0
     }
 
     val notificationPreferencesFlow: Flow<NotificationPreferences> = context.dataStore.data.map { prefs ->
@@ -58,6 +73,24 @@ class PreferencesManager(private val context: Context) {
             } else {
                 prefs[Keys.LOGGED_IN_USERNAME] = username.trim().lowercase()
             }
+        }
+    }
+
+    suspend fun setSelectedAcademicYear(year: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SELECTED_ACADEMIC_YEAR] = year.trim()
+        }
+    }
+
+    suspend fun setSelectedSemester(semester: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SELECTED_SEMESTER] = semester.trim()
+        }
+    }
+
+    suspend fun setSkippedUpdateVersion(versionCode: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SKIPPED_UPDATE_VERSION_CODE] = versionCode.coerceAtLeast(0)
         }
     }
 

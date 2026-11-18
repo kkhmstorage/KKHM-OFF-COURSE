@@ -38,8 +38,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -63,9 +65,13 @@ import com.example.data.model.DarkModePreference
 import com.example.data.model.OffCourseRecord
 import com.example.data.model.UiState
 import com.example.data.model.UserRole
+import com.example.data.remote.AppUpdateHelper
+import com.example.data.remote.UpdateCheckUiState
 import com.example.data.remote.authStateFlow
 import com.example.data.remote.signOutUser
 import com.example.export.OffCoursePdfExporter
+import com.example.ui.components.AppUpdateBanner
+import com.example.ui.components.AppUpdateDetailsDialog
 import com.example.ui.components.ThemeToggleIconButton
 import com.example.ui.screens.AcademicSettingsScreen
 import com.example.ui.screens.AdminDashboardScreen
@@ -87,12 +93,13 @@ object Routes {
     const val WORKSPACE = "workspace"
     const val SETTINGS = "settings"
     const val RECORD_FORM = "record_form?recordId={recordId}"
-    const val RECORD_DETAIL = "record_detail/{recordId}"
+    const val RECORD_DETAIL = "record_detail/{recordId}?openNextWeek={openNextWeek}"
 
     fun recordForm(recordId: String? = null): String =
         if (recordId.isNullOrBlank()) "record_form" else "record_form?recordId=$recordId"
 
-    fun recordDetail(recordId: String): String = "record_detail/$recordId"
+    fun recordDetail(recordId: String, openNextWeek: Boolean = false): String =
+        "record_detail/$recordId?openNextWeek=$openNextWeek"
 }
 
 class MainActivity : ComponentActivity() {
@@ -192,10 +199,13 @@ fun AuthenticatedShell(
     val weeklyReportsState by viewModel.weeklyReportsState.collectAsStateWithLifecycle()
     val selectedYear by viewModel.selectedAcademicYear.collectAsStateWithLifecycle()
     val selectedSemester by viewModel.selectedSemester.collectAsStateWithLifecycle()
+    val assignedGuideAccount by viewModel.assignedGuideAccount.collectAsStateWithLifecycle()
     val isActionInProgress by viewModel.isActionInProgress.collectAsStateWithLifecycle()
     val portalLoginError by viewModel.portalLoginError.collectAsStateWithLifecycle()
     val seededCredentials by viewModel.seededCredentialsDialog.collectAsStateWithLifecycle()
     val bulkImportState by viewModel.bulkImportState.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    var showUpdateDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -349,12 +359,31 @@ fun AuthenticatedShell(
             }
         }
     ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Routes.WORKSPACE,
-            modifier = Modifier.padding(innerPadding)
-        ) {
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            val availableUpdate = updateState as? UpdateCheckUiState.UpdateAvailable
+            if (showMainChrome && availableUpdate != null && !availableUpdate.isDismissedBanner) {
+                AppUpdateBanner(
+                    release = availableUpdate.release,
+                    onOpenDetails = { showUpdateDialog = true },
+                    onDownloadClick = {
+                        val res = AppUpdateHelper.openDownloadUrl(context, availableUpdate.release.apkUrl)
+                        if (res.isFailure) {
+                            viewModel.showMessage("Could not open browser for download.")
+                        }
+                    },
+                    onDismiss = { viewModel.dismissUpdateBanner(availableUpdate.release.versionCode) }
+                )
+            }
+            NavHost(
+                navController = navController,
+                startDestination = Routes.WORKSPACE,
+                modifier = Modifier.weight(1f)
+            ) {
             composable(Routes.WORKSPACE) {
+                val showAllTerms: () -> Unit = {
+                    viewModel.selectAcademicYear("ALL")
+                    viewModel.selectSemester("ALL")
+                }
                 when (activeRole) {
                     UserRole.STUDENT -> StudentHomeScreen(
                         recordsState = studentRecordsState,
@@ -367,6 +396,11 @@ fun AuthenticatedShell(
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
                         },
+                        onQuickLogNextWeek = { id ->
+                            viewModel.selectRecord(id)
+                            navController.navigate(Routes.recordDetail(id, openNextWeek = true))
+                        },
+                        onShowAllTerms = showAllTerms,
                         onCreateNewRecord = { navController.navigate(Routes.recordForm()) },
                         onExportPdf = exportRecordPdf
                     )
@@ -379,6 +413,7 @@ fun AuthenticatedShell(
                         selectedSemester = selectedSemester,
                         onSelectYear = viewModel::selectAcademicYear,
                         onSelectSemester = viewModel::selectSemester,
+                        onShowAllTerms = showAllTerms,
                         onOpenRecord = { id ->
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
@@ -392,6 +427,7 @@ fun AuthenticatedShell(
                         selectedSemester = selectedSemester,
                         onSelectYear = viewModel::selectAcademicYear,
                         onSelectSemester = viewModel::selectSemester,
+                        onShowAllTerms = showAllTerms,
                         onOpenRecord = { id ->
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
@@ -410,6 +446,7 @@ fun AuthenticatedShell(
                         onDismissSeededCredentials = viewModel::dismissSeededCredentialsDialog,
                         onSelectYear = viewModel::selectAcademicYear,
                         onSelectSemester = viewModel::selectSemester,
+                        onShowAllTerms = showAllTerms,
                         onSaveAccount = { u, n, r, p, st, cic, dept, str, gUser, ph ->
                             viewModel.saveCollegeAccount(u, n, r, p, st, cic, dept, str, gUser, ph)
                         },
@@ -439,6 +476,7 @@ fun AuthenticatedShell(
                     darkModePreference = darkModePreference,
                     notificationPrefs = notificationPrefs,
                     termsState = termsState,
+                    updateState = updateState,
                     onSelectDarkMode = viewModel::setDarkMode,
                     onLogoutPortal = viewModel::logoutPortalAccount,
                     onUpdateNotifications = viewModel::updateNotificationSettings,
@@ -447,6 +485,15 @@ fun AuthenticatedShell(
                         viewModel.createAcademicTerm(y, s, st, w, p, n)
                     },
                     onUpdateTermStatus = viewModel::updateAcademicTermStatus,
+                    onCheckForUpdate = { viewModel.checkForAppUpdate(silent = false) },
+                    onDownloadUpdate = { url ->
+                        val res = AppUpdateHelper.openDownloadUrl(context, url)
+                        if (res.isFailure) viewModel.showMessage("Could not open download link.")
+                    },
+                    onOpenReleasePage = { url ->
+                        val res = AppUpdateHelper.openDownloadUrl(context, url)
+                        if (res.isFailure) viewModel.showMessage("Could not open GitHub release page.")
+                    },
                     onSignOut = {
                         viewModel.logoutPortalAccount()
                         signOutUser(credentialManager, scope)
@@ -465,15 +512,21 @@ fun AuthenticatedShell(
                 )
             ) { entry ->
                 val recordId = entry.arguments?.getString("recordId")
-                val pool = ((studentRecordsState as? UiState.Success)?.data.orEmpty() +
-                    (adminRecordsState as? UiState.Success)?.data.orEmpty())
+                val studentList = (studentRecordsState as? UiState.Success)?.data.orEmpty()
+                val pool = studentList + (adminRecordsState as? UiState.Success)?.data.orEmpty()
                 val existing = pool.firstOrNull { it.id == recordId }
+                val latestStudentRecord = studentList.firstOrNull()
                 OffCourseRecordFormScreen(
                     existingRecord = existing,
+                    latestStudentRecord = latestStudentRecord,
                     activeAccount = activeAccount,
+                    assignedGuideAccount = assignedGuideAccount,
+                    selectedYear = selectedYear,
+                    selectedSemester = selectedSemester,
                     userEmail = currentUserEmail,
                     terms = terms,
                     isSaving = isActionInProgress,
+                    onLookupGuide = viewModel::lookupGuideAccount,
                     onBack = { navController.popBackStack() },
                     onSave = { updated ->
                         viewModel.saveOffCourseRecord(updated) { savedId ->
@@ -486,9 +539,16 @@ fun AuthenticatedShell(
 
             composable(
                 route = Routes.RECORD_DETAIL,
-                arguments = listOf(navArgument("recordId") { type = NavType.StringType })
+                arguments = listOf(
+                    navArgument("recordId") { type = NavType.StringType },
+                    navArgument("openNextWeek") {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    }
+                )
             ) { entry ->
                 val recordId = entry.arguments?.getString("recordId").orEmpty()
+                val openNextWeek = entry.arguments?.getBoolean("openNextWeek") ?: false
                 LaunchedEffect(recordId) {
                     if (recordId.isNotBlank()) viewModel.selectRecord(recordId)
                 }
@@ -499,6 +559,7 @@ fun AuthenticatedShell(
                     currentUserId = currentUserId,
                     currentUserName = activeAccount.displayName.ifBlank { currentUserName },
                     notificationPrefs = notificationPrefs,
+                    initialOpenNextWeek = openNextWeek,
                     onBack = { navController.popBackStack() },
                     onEditRecord = { id -> navController.navigate(Routes.recordForm(id)) },
                     onSubmitForReview = viewModel::submitRecordForReview,
@@ -519,5 +580,26 @@ fun AuthenticatedShell(
                 )
             }
         }
+        }
+    }
+
+    val dialogUpdate = updateState as? UpdateCheckUiState.UpdateAvailable
+    if (showUpdateDialog && dialogUpdate != null) {
+        AppUpdateDetailsDialog(
+            release = dialogUpdate.release,
+            currentVersionName = dialogUpdate.currentVersionName,
+            currentVersionCode = dialogUpdate.currentVersionCode,
+            onDismiss = { showUpdateDialog = false },
+            onDownloadApk = {
+                showUpdateDialog = false
+                val res = AppUpdateHelper.openDownloadUrl(context, dialogUpdate.release.apkUrl)
+                if (res.isFailure) viewModel.showMessage("Could not open browser for APK download.")
+            },
+            onOpenReleasePage = {
+                showUpdateDialog = false
+                val res = AppUpdateHelper.openDownloadUrl(context, dialogUpdate.release.releasePageUrl)
+                if (res.isFailure) viewModel.showMessage("Could not open release page.")
+            }
+        )
     }
 }

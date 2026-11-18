@@ -107,6 +107,26 @@ class CollegeAccountRepository(
         )
     }
 
+    suspend fun getAccountByUsername(rawUsername: String): CollegeAccount? {
+        val uid = auth.currentUser?.uid ?: return null
+        val clean = PasswordHasher.normalizeUsername(rawUsername)
+        if (!PasswordHasher.isValidUsername(clean)) return null
+        val docPath = "college_accounts/$clean"
+        return try {
+            val snap = db.collection("college_accounts").document(clean).get().await()
+            if (snap.exists()) {
+                snap.toObject(CollegeAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            } else null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (auth.currentUser?.uid == uid) {
+                handleFirestoreError(e, OperationType.GET, docPath)
+            }
+            null
+        }
+    }
+
     suspend fun authenticate(rawUsername: String, password: String): Result<CollegeAccount> {
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Google session missing."))
@@ -134,7 +154,10 @@ class CollegeAccountRepository(
                 return Result.failure(IllegalArgumentException("Incorrect password for '$username'."))
             }
 
-            val resolved = if (account.boundUid.isBlank()) {
+            val resolved = if (!isBootstrappedAdminDevice() &&
+                (account.boundUid.isBlank() || account.boundUid == account.createdByUid) &&
+                account.boundUid != uid
+            ) {
                 docRef.update(
                     mapOf(
                         "boundUid" to uid,
@@ -439,14 +462,54 @@ class CollegeAccountRepository(
         )
     }
 
+    suspend fun syncActiveAccountSession(account: CollegeAccount) {
+        val uid = auth.currentUser?.uid ?: return
+        try {
+            val resolved = if (!isBootstrappedAdminDevice() &&
+                (account.boundUid.isBlank() || account.boundUid == account.createdByUid) &&
+                account.boundUid != uid
+            ) {
+                db.collection("college_accounts").document(account.username).update(
+                    mapOf(
+                        "boundUid" to uid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                account.copy(boundUid = uid)
+            } else {
+                account
+            }
+            syncDeviceProfileRole(resolved)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, "users/$uid")
+        }
+    }
+
     private suspend fun syncDeviceProfileRole(account: CollegeAccount) {
         val uid = auth.currentUser?.uid ?: return
         val effectiveRole = if (account.role == UserRole.ADMIN.name) UserRole.PRINCIPAL.name else account.role
+        val verifiedPortalUsername = if (account.boundUid == uid || isBootstrappedAdminDevice()) {
+            account.username.take(40)
+        } else {
+            ""
+        }
         val docRef = db.collection("users").document(uid)
         val snap = docRef.get().await()
         if (snap.exists()) {
+            val existingPortal = snap.getString("portalUsername").orEmpty()
+            val existingRole = snap.getString("role").orEmpty()
+            val existingName = snap.getString("displayName").orEmpty()
+            if (existingPortal == verifiedPortalUsername &&
+                existingRole == effectiveRole &&
+                existingName == account.displayName.take(100)
+            ) {
+                return
+            }
             docRef.update(
                 mapOf(
+                    "portalUsername" to verifiedPortalUsername,
                     "displayName" to account.displayName.take(100),
                     "role" to effectiveRole,
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -456,6 +519,7 @@ class CollegeAccountRepository(
             docRef.set(
                 mapOf(
                     "userId" to uid,
+                    "portalUsername" to verifiedPortalUsername,
                     "displayName" to account.displayName.take(100),
                     "email" to currentEmailNormalized(),
                     "role" to effectiveRole,

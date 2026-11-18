@@ -109,6 +109,7 @@ val CIC_PERIODS = listOf(1, 2, 3, 5, 6, 7, 8)
 data class UserProfile(
     @DocumentId val id: String = "",
     val userId: String = "",
+    val portalUsername: String = "",
     val displayName: String = "",
     val email: String = "",
     val role: String = UserRole.STUDENT.name,

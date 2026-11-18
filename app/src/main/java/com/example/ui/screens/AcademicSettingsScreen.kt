@@ -24,13 +24,17 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,6 +59,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.data.local.NotificationPreferences
 import com.example.data.model.AcademicTerm
 import com.example.data.model.CollegeAccount
@@ -62,6 +67,7 @@ import com.example.data.model.DarkModePreference
 import com.example.data.model.TermStatus
 import com.example.data.model.UiState
 import com.example.data.model.UserRole
+import com.example.data.remote.UpdateCheckUiState
 import com.example.ui.components.StatusBadge
 import com.example.ui.theme.PendingAmber
 import com.example.ui.theme.VerifiedGreen
@@ -75,12 +81,16 @@ fun AcademicSettingsScreen(
     darkModePreference: DarkModePreference,
     notificationPrefs: NotificationPreferences,
     termsState: UiState<List<AcademicTerm>>,
+    updateState: UpdateCheckUiState = UpdateCheckUiState.Idle,
     onSelectDarkMode: (DarkModePreference) -> Unit,
     onLogoutPortal: () -> Unit,
     onUpdateNotifications: (Boolean, Int, Int) -> Unit,
     onSendTestNotification: () -> Unit,
     onCreateTerm: (String, String, TermStatus, Long, Long, String) -> Unit,
     onUpdateTermStatus: (String, TermStatus) -> Unit,
+    onCheckForUpdate: () -> Unit = {},
+    onDownloadUpdate: (String) -> Unit = {},
+    onOpenReleasePage: (String) -> Unit = {},
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -167,6 +177,100 @@ fun AcademicSettingsScreen(
                                 Text(pref.label)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // App Updates via GitHub Releases
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.SystemUpdateAlt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text("App Updates (GitHub Releases)", style = MaterialTheme.typography.titleMedium)
+                                val shaSuffix = if (BuildConfig.BUILD_COMMIT_SHA.isNotBlank()) " • ${BuildConfig.BUILD_COMMIT_SHA}" else ""
+                                Text(
+                                    text = "Installed: v${BuildConfig.VERSION_NAME} (Code ${BuildConfig.VERSION_CODE}$shaSuffix)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (updateState is UpdateCheckUiState.UpToDate) {
+                            StatusBadge("Up to Date", VerifiedGreen.copy(alpha = 0.16f), VerifiedGreen)
+                        } else if (updateState is UpdateCheckUiState.UpdateAvailable) {
+                            StatusBadge("Update Ready", PendingAmber.copy(alpha = 0.18f), PendingAmber)
+                        }
+                    }
+
+                    when (updateState) {
+                        is UpdateCheckUiState.Checking -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Text("Checking GitHub Releases for newer APK...", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        is UpdateCheckUiState.UpdateAvailable -> {
+                            Text(
+                                text = "Latest Version: v${updateState.release.versionName} (Code ${updateState.release.versionCode})",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (updateState.release.releaseNotes.isNotBlank()) {
+                                Text(
+                                    text = updateState.release.releaseNotes,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { onDownloadUpdate(updateState.release.apkUrl) },
+                                    modifier = Modifier.weight(1f).testTag("settings_download_update_button")
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Download APK")
+                                }
+                                OutlinedButton(onClick = { onOpenReleasePage(updateState.release.releasePageUrl) }) {
+                                    Text("Release Page")
+                                }
+                            }
+                        }
+                        is UpdateCheckUiState.Error -> {
+                            Text(
+                                text = updateState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        else -> Unit
+                    }
+
+                    OutlinedButton(
+                        onClick = onCheckForUpdate,
+                        enabled = updateState !is UpdateCheckUiState.Checking,
+                        modifier = Modifier.fillMaxWidth().testTag("check_app_update_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Check GitHub Releases for Updates")
                     }
                 }
             }

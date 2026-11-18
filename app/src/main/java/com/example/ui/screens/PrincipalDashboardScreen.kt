@@ -62,6 +62,7 @@ fun PrincipalDashboardScreen(
     selectedSemester: String,
     onSelectYear: (String) -> Unit,
     onSelectSemester: (String) -> Unit,
+    onShowAllTerms: () -> Unit = {},
     onOpenRecord: (String) -> Unit,
     onOpenAcademicSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -276,10 +277,22 @@ fun PrincipalDashboardScreen(
                                 )
                                 Text("No Records Match Filter", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    "Records assigned to Principal ($userEmail) or across the institution will appear here.",
+                                    text = if (all.isEmpty()) "Records across KKHM Islamic & Arts College will appear here."
+                                    else "There are ${all.size} record(s) under other Academic Years or Semesters.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (all.isNotEmpty()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            searchQuery = ""
+                                            onShowAllTerms()
+                                        },
+                                        modifier = Modifier.testTag("principal_show_all_terms_button")
+                                    ) {
+                                        Text("Show All Years & Semesters")
+                                    }
+                                }
                             }
                         }
                     }

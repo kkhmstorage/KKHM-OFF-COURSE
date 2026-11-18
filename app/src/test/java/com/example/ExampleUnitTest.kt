@@ -1,7 +1,12 @@
 package com.example
 
 import com.example.data.model.CicStream
+import com.example.data.model.OffCourseRecord
+import com.example.data.model.PeriodLogEntry
 import com.example.data.model.UserRole
+import com.example.data.model.WeeklyScheduleHelper
+import com.example.data.model.WeeklyStudyReport
+import com.example.data.remote.AppUpdateHelper
 import com.example.data.remote.BulkUserCsvHelper
 import com.example.data.remote.PasswordHasher
 import org.junit.Assert.assertEquals
@@ -60,5 +65,100 @@ class ExampleUnitTest {
         assertNotNull(result.rows[1].validationError)
         assertFalse(result.rows[2].isValid)
         assertFalse(result.rows[3].isValid)
+    }
+
+    @Test
+    fun `nextPendingWeek detects first unfilled week and caps at totalWeeks`() {
+        assertEquals(1, WeeklyScheduleHelper.nextPendingWeek(emptyList()))
+        val logged123 = listOf(
+            WeeklyStudyReport(weekNumber = 1L),
+            WeeklyStudyReport(weekNumber = 2L),
+            WeeklyStudyReport(weekNumber = 4L)
+        )
+        assertEquals(3, WeeklyScheduleHelper.nextPendingWeek(logged123))
+        val all18 = (1..18).map { WeeklyStudyReport(weekNumber = it.toLong()) }
+        assertEquals(18, WeeklyScheduleHelper.nextPendingWeek(all18))
+    }
+
+    @Test
+    fun `suggestWeekDateRange advances sequentially from prior week dateTo`() {
+        val prev = WeeklyStudyReport(
+            weekNumber = 1L,
+            dateFrom = "01/06/2026",
+            dateTo = "07/06/2026"
+        )
+        val (fromW2, toW2) = WeeklyScheduleHelper.suggestWeekDateRange(2, listOf(prev))
+        assertEquals("08/06/2026", fromW2)
+        assertEquals("14/06/2026", toW2)
+    }
+
+    @Test
+    fun `buildInitialPeriodEntries and composeWeeklyDescription preserve per-period activity notes`() {
+        val record = OffCourseRecord(
+            timetableSlots = listOf("Monday:3", "Wednesday:6"),
+            periodsPerWeek = 2L
+        )
+        val entries = WeeklyScheduleHelper.buildInitialPeriodEntries(record, null)
+        assertEquals(2, entries.size)
+        assertEquals("Monday", entries[0].day)
+        assertEquals(3, entries[0].period)
+
+        val edited = listOf(
+            entries[0].copy(note = "Studied Surah Al-Kahf commentary"),
+            entries[1].copy(effectiveness = "PARTIAL", minutes = 25, note = "Prepared Arabic notes")
+        )
+        val composed = WeeklyScheduleHelper.composeWeeklyDescription("", edited)
+        assertTrue(composed.contains("Mon P3: Studied Surah Al-Kahf commentary"))
+        assertTrue(composed.contains("Wed P6: Prepared Arabic notes"))
+        assertEquals("Custom overview", WeeklyScheduleHelper.composeWeeklyDescription("Custom overview", edited))
+    }
+
+    @Test
+    fun `app update helper parses version json and compares versionCode accurately`() {
+        val json = """
+            {
+              "versionCode": 9,
+              "versionName": "1.1.7",
+              "buildNumber": 7,
+              "commitSha": "deadbee",
+              "releaseNotes": "feat: add GitHub Releases updater",
+              "publishedAt": "2026-11-18T14:00:00Z",
+              "apkUrl": "https://github.com/kkhmstorage/KKHM-OFF-COURSE/releases/download/latest/KKHM-Off-Course-debug.apk",
+              "releasePageUrl": "https://github.com/kkhmstorage/KKHM-OFF-COURSE/releases/tag/latest"
+            }
+        """.trimIndent()
+        val parsed = AppUpdateHelper.parseVersionJson(json)
+        assertNotNull(parsed)
+        assertEquals(9, parsed!!.versionCode)
+        assertEquals("1.1.7", parsed.versionName)
+        assertEquals(7, parsed.buildNumber)
+        assertEquals("deadbee", parsed.commitSha)
+        assertEquals("feat: add GitHub Releases updater", parsed.releaseNotes)
+        assertTrue(AppUpdateHelper.isUpdateAvailable(localVersionCode = 8, localBuildNumber = 6, localCommitSha = "1111111", remote = parsed))
+        assertFalse(AppUpdateHelper.isUpdateAvailable(localVersionCode = 9, localBuildNumber = 7, localCommitSha = "deadbee", remote = parsed))
+    }
+
+    @Test
+    fun `app update helper falls back to github release api json when version json absent`() {
+        val apiJson = """
+            {
+              "html_url": "https://github.com/kkhmstorage/KKHM-OFF-COURSE/releases/tag/latest",
+              "name": "KKHM Off-Course v1.1.8 (Build 8)",
+              "body": "### KKHM Off-Course v1.1.8 (Build 8)\n- **Version Code:** `10`",
+              "published_at": "2026-11-18T15:00:00Z",
+              "assets": [
+                {
+                  "name": "KKHM-Off-Course-debug.apk",
+                  "browser_download_url": "https://github.com/kkhmstorage/KKHM-OFF-COURSE/releases/download/latest/KKHM-Off-Course-debug.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsed = AppUpdateHelper.parseGitHubReleaseApiJson(apiJson)
+        assertNotNull(parsed)
+        assertEquals(10, parsed!!.versionCode)
+        assertEquals("1.1.8", parsed.versionName)
+        assertEquals(8, parsed.buildNumber)
+        assertTrue(parsed.apkUrl.endsWith("KKHM-Off-Course-debug.apk"))
     }
 }

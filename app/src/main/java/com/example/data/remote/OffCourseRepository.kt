@@ -24,6 +24,7 @@ import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -333,21 +334,40 @@ class OffCourseRepository(
         val uid = requireUserId()
         val cleanUser = PasswordHasher.normalizeUsername(studentUsername)
         val path = "off_course_records"
-        val query = if (isBootstrappedAdmin() && cleanUser.isNotBlank()) {
-            db.collection(path).whereEqualTo("studentUsername", cleanUser)
-        } else {
-            db.collection(path).whereEqualTo("studentUid", studentUid)
+        val flows = buildList {
+            if (!isBootstrappedAdmin()) {
+                add(
+                    db.collection(path)
+                        .whereEqualTo("studentUid", studentUid)
+                        .snapshots()
+                        .map { it.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .handleSnapshotErrors(OperationType.LIST, path, uid)
+                )
+            }
+            if (cleanUser.isNotBlank()) {
+                add(
+                    db.collection(path)
+                        .whereEqualTo("studentUsername", cleanUser)
+                        .snapshots()
+                        .map { it.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .handleSnapshotErrors(OperationType.LIST, path, uid)
+                )
+            }
+        }
+        if (flows.isEmpty()) {
+            emit(emptyList())
+            return@flow
         }
         emitAll(
-            query.snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .filter { rec ->
-                            cleanUser.isBlank() || rec.studentUsername == cleanUser || rec.studentUsername.isBlank()
-                        }
-                        .sortedByDescending { it.updatedAt ?: it.createdAt }
-                }
-                .handleSnapshotErrors(OperationType.LIST, path, uid)
+            combine(flows) { lists ->
+                lists.asIterable()
+                    .flatten()
+                    .distinctBy { it.id }
+                    .filter { rec ->
+                        cleanUser.isBlank() || rec.studentUsername == cleanUser || rec.studentUsername.isBlank()
+                    }
+                    .sortedByDescending { it.updatedAt ?: it.createdAt }
+            }
         )
     }
 
@@ -356,26 +376,37 @@ class OffCourseRepository(
         val normalizedEmail = guideEmail.trim().lowercase()
         val cleanGuideUser = PasswordHasher.normalizeUsername(guideUsername)
         val path = "off_course_records"
-        val query = when {
-            isBootstrappedAdmin() && cleanGuideUser.isNotBlank() ->
-                db.collection(path).whereEqualTo("guideUsername", cleanGuideUser)
-            normalizedEmail.isNotBlank() ->
-                db.collection(path).whereEqualTo("guideEmail", normalizedEmail)
-            else -> {
-                emit(emptyList())
-                return@flow
+        val flows = buildList {
+            if (cleanGuideUser.isNotBlank()) {
+                add(
+                    db.collection(path)
+                        .whereEqualTo("guideUsername", cleanGuideUser)
+                        .snapshots()
+                        .map { it.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .handleSnapshotErrors(OperationType.LIST, path, uid)
+                )
+            }
+            if (!isBootstrappedAdmin() && normalizedEmail.isNotBlank()) {
+                add(
+                    db.collection(path)
+                        .whereEqualTo("guideEmail", normalizedEmail)
+                        .snapshots()
+                        .map { it.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .handleSnapshotErrors(OperationType.LIST, path, uid)
+                )
             }
         }
+        if (flows.isEmpty()) {
+            emit(emptyList())
+            return@flow
+        }
         emitAll(
-            query.snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .filter { rec ->
-                            cleanGuideUser.isBlank() || rec.guideUsername == cleanGuideUser || rec.guideUsername.isBlank()
-                        }
-                        .sortedByDescending { it.updatedAt ?: it.createdAt }
-                }
-                .handleSnapshotErrors(OperationType.LIST, path, uid)
+            combine(flows) { lists ->
+                lists.asIterable()
+                    .flatten()
+                    .distinctBy { it.id }
+                    .sortedByDescending { it.updatedAt ?: it.createdAt }
+            }
         )
     }
 
@@ -548,6 +579,13 @@ class OffCourseRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.update(updates).await()
+                propagateRoutingToWeeklyReports(
+                    recordId = docRef.id,
+                    studentUsername = studentUsername,
+                    guideUsername = guideUsername,
+                    guideEmail = guideEmail,
+                    principalEmail = principalEmail
+                )
             }
             Result.success(docRef.id)
         } catch (e: CancellationException) {
@@ -555,6 +593,43 @@ class OffCourseRepository(
         } catch (e: Exception) {
             handleFirestoreError(e, if (isNew) OperationType.CREATE else OperationType.UPDATE, docPath)
             Result.failure(e)
+        }
+    }
+
+    private suspend fun propagateRoutingToWeeklyReports(
+        recordId: String,
+        studentUsername: String,
+        guideUsername: String,
+        guideEmail: String,
+        principalEmail: String
+    ) {
+        try {
+            val uid = auth.currentUser?.uid ?: return
+            val collectionRef = db.collection("off_course_records")
+                .document(recordId)
+                .collection("weekly_reports")
+            val query = when {
+                isBootstrappedAdmin() -> collectionRef
+                studentUsername.isNotBlank() -> collectionRef.whereEqualTo("studentUsername", studentUsername)
+                else -> collectionRef.whereEqualTo("studentUid", uid)
+            }
+            val reports = query.get().await().documents
+            reports.forEach { doc ->
+                val updates = mutableMapOf<String, Any>(
+                    "guideUsername" to guideUsername,
+                    "guideEmail" to guideEmail,
+                    "principalEmail" to principalEmail,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (!isBootstrappedAdmin()) {
+                    updates["studentUsername"] = studentUsername
+                }
+                doc.reference.update(updates).await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Non-fatal sync if subcollection has no editable docs
         }
     }
 
@@ -568,14 +643,27 @@ class OffCourseRepository(
         return try {
             requireUserId()
             require(guideName.trim().isNotEmpty()) { "Guide name is required." }
-            db.collection("off_course_records").document(recordId).update(
+            val cleanGuideUser = PasswordHasher.normalizeUsername(guideUsername).take(40)
+            val cleanGuideEmail = guideEmail.trim().lowercase().take(120)
+            val recordRef = db.collection("off_course_records").document(recordId)
+            recordRef.update(
                 mapOf(
-                    "guideUsername" to PasswordHasher.normalizeUsername(guideUsername).take(40),
+                    "guideUsername" to cleanGuideUser,
                     "guideName" to guideName.trim().take(100),
-                    "guideEmail" to guideEmail.trim().lowercase().take(120),
+                    "guideEmail" to cleanGuideEmail,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            val subReports = recordRef.collection("weekly_reports").get().await().documents
+            subReports.forEach { doc ->
+                doc.reference.update(
+                    mapOf(
+                        "guideUsername" to cleanGuideUser,
+                        "guideEmail" to cleanGuideEmail,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -664,24 +752,77 @@ class OffCourseRepository(
     fun observeWeeklyReports(
         recordId: String,
         role: UserRole,
-        studentUid: String
+        studentUid: String,
+        guideUsername: String = "",
+        studentUsername: String = ""
     ): Flow<List<WeeklyStudyReport>> = flow {
         val uid = requireUserId()
         val path = "off_course_records/$recordId/weekly_reports"
         val collectionRef = db.collection("off_course_records").document(recordId).collection("weekly_reports")
-        val query = when {
-            isBootstrappedAdmin() -> collectionRef
-            role == UserRole.PRINCIPAL -> collectionRef.whereEqualTo("principalEmail", currentEmailNormalized())
-            role == UserRole.GUIDE -> collectionRef.whereEqualTo("guideEmail", currentEmailNormalized())
-            else -> collectionRef.whereEqualTo("studentUid", studentUid)
-        }
-        emitAll(
-            query.snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedBy { it.weekNumber }
+        val cleanGuideUser = PasswordHasher.normalizeUsername(guideUsername)
+        val cleanStudentUser = PasswordHasher.normalizeUsername(studentUsername)
+        val normalizedEmail = currentEmailNormalized()
+
+        val flows: List<Flow<List<WeeklyStudyReport>>> = when {
+            isBootstrappedAdmin() -> listOf(
+                collectionRef.snapshots()
+                    .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                    .handleSnapshotErrors(OperationType.LIST, path, uid)
+            )
+            role == UserRole.PRINCIPAL -> listOf(
+                collectionRef.whereEqualTo("principalEmail", normalizedEmail)
+                    .snapshots()
+                    .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                    .handleSnapshotErrors(OperationType.LIST, path, uid)
+            )
+            role == UserRole.GUIDE -> buildList {
+                if (cleanGuideUser.isNotBlank()) {
+                    add(
+                        collectionRef.whereEqualTo("guideUsername", cleanGuideUser)
+                            .snapshots()
+                            .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                            .handleSnapshotErrors(OperationType.LIST, path, uid)
+                    )
                 }
-                .handleSnapshotErrors(OperationType.LIST, path, uid)
+                if (normalizedEmail.isNotBlank()) {
+                    add(
+                        collectionRef.whereEqualTo("guideEmail", normalizedEmail)
+                            .snapshots()
+                            .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                            .handleSnapshotErrors(OperationType.LIST, path, uid)
+                    )
+                }
+            }
+            else -> buildList {
+                add(
+                    collectionRef.whereEqualTo("studentUid", studentUid)
+                        .snapshots()
+                        .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .handleSnapshotErrors(OperationType.LIST, path, uid)
+                )
+                if (cleanStudentUser.isNotBlank()) {
+                    add(
+                        collectionRef.whereEqualTo("studentUsername", cleanStudentUser)
+                            .snapshots()
+                            .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                            .handleSnapshotErrors(OperationType.LIST, path, uid)
+                    )
+                }
+            }
+        }
+
+        if (flows.isEmpty()) {
+            emit(emptyList())
+            return@flow
+        }
+
+        emitAll(
+            combine(flows) { lists ->
+                lists.asIterable()
+                    .flatten()
+                    .distinctBy { it.id }
+                    .sortedBy { it.weekNumber }
+            }
         )
     }
 
@@ -822,10 +963,17 @@ class OffCourseRepository(
             val collectionRef = db.collection("off_course_records")
                 .document(record.id)
                 .collection("weekly_reports")
+            val cleanGuideUser = PasswordHasher.normalizeUsername(record.guideUsername)
             val query = when {
                 isBootstrappedAdmin() -> collectionRef
                 role == UserRole.PRINCIPAL || role == UserRole.ADMIN ->
                     collectionRef.whereEqualTo("principalEmail", currentEmailNormalized())
+                cleanGuideUser.isNotBlank() && record.guideEmail.isBlank() ->
+                    collectionRef.whereEqualTo("guideUsername", cleanGuideUser)
+                record.guideEmail.isNotBlank() && record.guideEmail.equals(currentEmailNormalized(), ignoreCase = true) ->
+                    collectionRef.whereEqualTo("guideEmail", currentEmailNormalized())
+                cleanGuideUser.isNotBlank() ->
+                    collectionRef.whereEqualTo("guideUsername", cleanGuideUser)
                 else -> collectionRef.whereEqualTo("guideEmail", currentEmailNormalized())
             }
             val reports = query.get().await()

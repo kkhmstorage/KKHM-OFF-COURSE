@@ -6,6 +6,7 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
+        "portalUsername": { "type": "string" },
         "displayName": { "type": "string" },
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["STUDENT", "GUIDE", "PRINCIPAL", "ADMIN"] },

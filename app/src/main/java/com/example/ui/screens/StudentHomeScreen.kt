@@ -62,6 +62,8 @@ fun StudentHomeScreen(
     onSelectYear: (String) -> Unit,
     onSelectSemester: (String) -> Unit,
     onOpenRecord: (String) -> Unit,
+    onQuickLogNextWeek: (String) -> Unit = onOpenRecord,
+    onShowAllTerms: () -> Unit = {},
     onCreateNewRecord: () -> Unit,
     onExportPdf: (OffCourseRecord) -> Unit,
     modifier: Modifier = Modifier
@@ -247,14 +249,27 @@ fun StudentHomeScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "No Off-Course Records Yet",
+                                    text = if (allRecords.isEmpty()) "No Off-Course Records Yet"
+                                    else "No Records in $selectedYear ($selectedSemester)",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Text(
-                                    text = "Digitize your KKHM Islamic & Arts College (CIC) Off-Course Record Book to log weekly study reports, track period utilization, and get day-of-period alerts.",
+                                    text = if (allRecords.isEmpty()) {
+                                        "Create your KKHM Islamic & Arts College Off-Course Record once — your profile and Guide details are pre-filled automatically."
+                                    } else {
+                                        "You have ${allRecords.size} record(s) under other Academic Years or Semesters."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (allRecords.isNotEmpty()) {
+                                    FilledTonalButton(
+                                        onClick = onShowAllTerms,
+                                        modifier = Modifier.testTag("student_show_all_terms_button")
+                                    ) {
+                                        Text("Show All Years & Semesters")
+                                    }
+                                }
                                 Button(
                                     onClick = onCreateNewRecord,
                                     modifier = Modifier.testTag("empty_create_record_button")
@@ -271,6 +286,7 @@ fun StudentHomeScreen(
                         StudentRecordCard(
                             record = record,
                             onOpen = { onOpenRecord(record.id) },
+                            onQuickLogNextWeek = { onQuickLogNextWeek(record.id) },
                             onExportPdf = { onExportPdf(record) }
                         )
                     }
@@ -299,10 +315,12 @@ private fun MetricMiniPill(label: String, value: String) {
 private fun StudentRecordCard(
     record: OffCourseRecord,
     onOpen: () -> Unit,
+    onQuickLogNextWeek: () -> Unit,
     onExportPdf: () -> Unit
 ) {
     val (guideBg, guideFg) = signatureStatusColors(record.guideSignatureStatus)
     val (prinBg, prinFg) = signatureStatusColors(record.principalSignatureStatus)
+    val nextWeekHint = (record.completedWeeksCount + 1).coerceIn(1, 18)
 
     ElevatedCard(
         onClick = onOpen,
@@ -382,20 +400,25 @@ private fun StudentRecordCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Button(
+                    onClick = onQuickLogNextWeek,
+                    modifier = Modifier.weight(1f).testTag("quick_log_week_${record.id}")
+                ) {
+                    Text("Log Week $nextWeekHint")
+                }
                 FilledTonalButton(
                     onClick = onOpen,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(0.9f)
                 ) {
-                    Text("Open Record & Weeks")
+                    Text("Details")
                 }
                 OutlinedButton(
                     onClick = onExportPdf
                 ) {
                     Icon(Icons.Default.PictureAsPdf, contentDescription = "Export PDF", modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("PDF")
                 }
             }
         }

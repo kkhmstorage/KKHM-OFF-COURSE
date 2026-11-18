@@ -57,6 +57,7 @@ fun GuideDashboardScreen(
     selectedSemester: String,
     onSelectYear: (String) -> Unit,
     onSelectSemester: (String) -> Unit,
+    onShowAllTerms: () -> Unit = {},
     onOpenRecord: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -173,12 +174,32 @@ fun GuideDashboardScreen(
                                     modifier = Modifier.size(40.dp),
                                     tint = MaterialTheme.colorScheme.primary
                                 )
-                                Text("No Assigned Mentee Records Found", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "Students appear here when assigned to '@$activeUsername' by KKHM Admin or listed under '$userEmail'.",
+                                    text = if (all.isEmpty()) "No Assigned Mentee Records Found"
+                                    else "No Records in $selectedYear ($selectedSemester)",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = if (all.isEmpty()) {
+                                        "Students appear here when assigned to '@$activeUsername' or listed under '$userEmail'."
+                                    } else {
+                                        "You have ${all.size} assigned mentee record(s) under other Academic Years or Semesters."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (all.isNotEmpty()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            onlyPending = false
+                                            searchQuery = ""
+                                            onShowAllTerms()
+                                        },
+                                        modifier = Modifier.testTag("guide_show_all_terms_button")
+                                    ) {
+                                        Text("Show All Years & Semesters")
+                                    }
+                                }
                             }
                         }
                     }
@@ -214,7 +235,7 @@ fun GuideDashboardScreen(
                                     )
                                 }
                                 Text(
-                                    text = "Utilization: ${record.utilizationPercent}% (${record.totalUtilizedPeriods}/${record.totalAllocatedPeriods}) • Weeks Verified: ${record.verifiedWeeksCount}/${record.completedWeeksCount}",
+                                    text = "${record.academicYear} (${record.semester}) • Utilization: ${record.utilizationPercent}% • Logged: ${record.completedWeeksCount}/18 Wks (Verified: ${record.verifiedWeeksCount})",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -222,7 +243,7 @@ fun GuideDashboardScreen(
                                     onClick = { onOpenRecord(record.id) },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("Review Study Reports & Sign")
+                                    Text("View Study Reports & Period Logs")
                                 }
                             }
                         }

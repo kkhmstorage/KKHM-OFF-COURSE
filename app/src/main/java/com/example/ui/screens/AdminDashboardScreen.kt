@@ -90,6 +90,7 @@ fun AdminDashboardScreen(
     onDismissSeededCredentials: () -> Unit,
     onSelectYear: (String) -> Unit,
     onSelectSemester: (String) -> Unit,
+    onShowAllTerms: () -> Unit = {},
     onSaveAccount: (String, String, UserRole, String?, AccountStatus, String, String, String, String, String) -> Unit,
     onResetPassword: (String, String) -> Unit,
     onToggleAccountStatus: (String, AccountStatus) -> Unit,
@@ -167,6 +168,7 @@ fun AdminDashboardScreen(
                 onSearchChange = { recordSearch = it },
                 onSelectYear = onSelectYear,
                 onSelectSemester = onSelectSemester,
+                onShowAllTerms = onShowAllTerms,
                 onOpenRecord = onOpenRecord,
                 onReassignGuide = { reassignGuideFor = it },
                 onDeleteRecord = onDeleteRecord
@@ -449,6 +451,7 @@ private fun AdminRecordsTab(
     onSearchChange: (String) -> Unit,
     onSelectYear: (String) -> Unit,
     onSelectSemester: (String) -> Unit,
+    onShowAllTerms: () -> Unit,
     onOpenRecord: (String) -> Unit,
     onReassignGuide: (OffCourseRecord) -> Unit,
     onDeleteRecord: (String) -> Unit
@@ -493,11 +496,24 @@ private fun AdminRecordsTab(
         } else if (filtered.isEmpty()) {
             item {
                 Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "No Off-Course records match the current filter.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(20.dp)
-                    )
+                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = if (records.isEmpty()) "No Off-Course records created yet."
+                            else "No records in $selectedYear ($selectedSemester) (${records.size} in other terms).",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        if (records.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = {
+                                    onSearchChange("")
+                                    onShowAllTerms()
+                                },
+                                modifier = Modifier.testTag("admin_show_all_terms_button")
+                            ) {
+                                Text("Show All Years & Semesters")
+                            }
+                        }
+                    }
                 }
             }
         } else {

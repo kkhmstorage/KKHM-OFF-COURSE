@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,9 +20,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,15 +40,20 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AcademicTerm
@@ -44,6 +61,7 @@ import com.example.data.model.CicStream
 import com.example.data.model.CollegeAccount
 import com.example.data.model.OffCourseRecord
 import com.example.data.model.TermStatus
+import com.example.ui.components.TimetableMatrixGrid
 
 private const val DEFAULT_KKHM_COLLEGE_NAME = "KKHM Islamic & Arts College (Affiliated to CIC)"
 
@@ -51,65 +69,156 @@ private const val DEFAULT_KKHM_COLLEGE_NAME = "KKHM Islamic & Arts College (Affi
 @Composable
 fun OffCourseRecordFormScreen(
     existingRecord: OffCourseRecord?,
+    latestStudentRecord: OffCourseRecord?,
     activeAccount: CollegeAccount?,
+    assignedGuideAccount: CollegeAccount?,
+    selectedYear: String,
+    selectedSemester: String,
     userEmail: String,
     terms: List<AcademicTerm>,
     isSaving: Boolean,
+    onLookupGuide: suspend (String) -> CollegeAccount?,
     onBack: () -> Unit,
     onSave: (OffCourseRecord) -> Unit
 ) {
     val activeTerm = terms.firstOrNull { it.status == TermStatus.ACTIVE.name } ?: terms.firstOrNull()
-    val availableYears = (terms.map { it.academicYear } + listOf("2025 - 2026", "2026 - 2027", "2027 - 2028"))
-        .filter { it.isNotBlank() }
+    val defaultYear = existingRecord?.academicYear
+        ?: selectedYear.takeIf { it.isNotBlank() && it != "ALL" }
+        ?: activeTerm?.academicYear
+        ?: "2026 - 2027"
+    val defaultSem = existingRecord?.semester
+        ?: selectedSemester.takeIf { it.isNotBlank() && it != "ALL" }
+        ?: activeTerm?.semester
+        ?: "Nov"
+
+    val availableYears = (terms.map { it.academicYear } + listOf(defaultYear, "2025 - 2026", "2026 - 2027", "2027 - 2028"))
+        .filter { it.isNotBlank() && it != "ALL" }
         .distinct()
-    val availableSemesters = (terms.map { it.semester } + listOf("Nov", "May"))
-        .filter { it.isNotBlank() }
+        .sortedDescending()
+    val availableSemesters = (terms.map { it.semester } + listOf(defaultSem, "Nov", "May"))
+        .filter { it.isNotBlank() && it != "ALL" }
         .distinct()
 
-    var studentName by remember(existingRecord, activeAccount) {
-        mutableStateOf(existingRecord?.studentName ?: activeAccount?.displayName.orEmpty())
-    }
-    var cicAdNo by remember(existingRecord, activeAccount) {
-        mutableStateOf(existingRecord?.cicAdNo ?: activeAccount?.cicAdNo.orEmpty())
-    }
-    var clgAdNo by remember(existingRecord) {
-        mutableStateOf(existingRecord?.clgAdNo.orEmpty())
-    }
-    var classDepartment by remember(existingRecord, activeAccount) {
-        mutableStateOf(existingRecord?.classDepartment ?: activeAccount?.classDepartment.orEmpty())
-    }
-    var academicYear by remember(existingRecord, activeTerm) {
-        mutableStateOf(existingRecord?.academicYear ?: activeTerm?.academicYear ?: "2026 - 2027")
-    }
-    var semester by remember(existingRecord, activeTerm) {
-        mutableStateOf(existingRecord?.semester ?: activeTerm?.semester ?: "Nov")
-    }
-    var selectedStream by remember(existingRecord, activeAccount) {
+    val prefillSource = existingRecord ?: latestStudentRecord
+
+    var studentName by remember(existingRecord?.id, activeAccount?.username, latestStudentRecord?.id) {
         mutableStateOf(
-            CicStream.fromLabel(existingRecord?.stream ?: activeAccount?.stream ?: CicStream.WAFY.label)
+            existingRecord?.studentName?.ifBlank { null }
+                ?: activeAccount?.displayName?.ifBlank { null }
+                ?: latestStudentRecord?.studentName.orEmpty()
         )
     }
-    var collegeAfflName by remember(existingRecord) {
-        mutableStateOf(existingRecord?.collegeAfflName?.ifBlank { DEFAULT_KKHM_COLLEGE_NAME } ?: DEFAULT_KKHM_COLLEGE_NAME)
+    var cicAdNo by remember(existingRecord?.id, activeAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.cicAdNo?.ifBlank { null }
+                ?: activeAccount?.cicAdNo?.ifBlank { null }
+                ?: latestStudentRecord?.cicAdNo.orEmpty()
+        )
+    }
+    var clgAdNo by remember(existingRecord?.id, latestStudentRecord?.id) {
+        mutableStateOf(prefillSource?.clgAdNo.orEmpty())
+    }
+    var classDepartment by remember(existingRecord?.id, activeAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.classDepartment?.ifBlank { null }
+                ?: activeAccount?.classDepartment?.ifBlank { null }
+                ?: latestStudentRecord?.classDepartment.orEmpty()
+        )
+    }
+    var academicYear by remember(existingRecord?.id, defaultYear) {
+        mutableStateOf(defaultYear)
+    }
+    var semester by remember(existingRecord?.id, defaultSem) {
+        mutableStateOf(defaultSem)
+    }
+    var selectedStream by remember(existingRecord?.id, activeAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            CicStream.fromLabel(
+                existingRecord?.stream?.ifBlank { null }
+                    ?: activeAccount?.stream?.ifBlank { null }
+                    ?: latestStudentRecord?.stream
+                    ?: CicStream.WAFY.label
+            )
+        )
+    }
+    var collegeAfflName by remember(existingRecord?.id, latestStudentRecord?.id) {
+        mutableStateOf(
+            prefillSource?.collegeAfflName?.ifBlank { DEFAULT_KKHM_COLLEGE_NAME } ?: DEFAULT_KKHM_COLLEGE_NAME
+        )
     }
 
-    var subjectTitle by remember(existingRecord) { mutableStateOf(existingRecord?.subjectTitle.orEmpty()) }
-    var proposalAppNo by remember(existingRecord) { mutableStateOf(existingRecord?.proposalAppNo.orEmpty()) }
-    var creditText by remember(existingRecord) { mutableStateOf((existingRecord?.credit ?: 4L).toString()) }
-    var guideUsername by remember(existingRecord, activeAccount) {
-        mutableStateOf(existingRecord?.guideUsername ?: activeAccount?.assignedGuideUsername.orEmpty())
+    var subjectTitle by remember(existingRecord?.id) { mutableStateOf(existingRecord?.subjectTitle.orEmpty()) }
+    var proposalAppNo by remember(existingRecord?.id) { mutableStateOf(existingRecord?.proposalAppNo.orEmpty()) }
+    var creditText by remember(existingRecord?.id) { mutableStateOf((existingRecord?.credit ?: 4L).toString()) }
+
+    val initialGuideUser = existingRecord?.guideUsername?.ifBlank { null }
+        ?: activeAccount?.assignedGuideUsername?.ifBlank { null }
+        ?: latestStudentRecord?.guideUsername.orEmpty()
+
+    var guideUsername by remember(existingRecord?.id, activeAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(initialGuideUser)
     }
-    var guideName by remember(existingRecord) { mutableStateOf(existingRecord?.guideName.orEmpty()) }
-    var guideEmail by remember(existingRecord) { mutableStateOf(existingRecord?.guideEmail.orEmpty()) }
-    var guidePhone by remember(existingRecord) { mutableStateOf(existingRecord?.guidePhone.orEmpty()) }
-    var guideWhatsapp by remember(existingRecord) { mutableStateOf(existingRecord?.guideWhatsapp.orEmpty()) }
-    var principalEmail by remember(existingRecord) {
-        mutableStateOf(existingRecord?.principalEmail ?: "kkhmstorage@gmail.com")
+    var guideName by remember(existingRecord?.id, assignedGuideAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.guideName?.ifBlank { null }
+                ?: assignedGuideAccount?.displayName?.ifBlank { null }
+                ?: latestStudentRecord?.guideName.orEmpty()
+        )
     }
-    var referenceBooks by remember(existingRecord) { mutableStateOf(existingRecord?.referenceBooks.orEmpty()) }
-    var selectedSlots by remember(existingRecord) {
-        mutableStateOf(existingRecord?.timetableSlots?.toSet() ?: setOf("Monday:2", "Wednesday:5"))
+    var guideEmail by remember(existingRecord?.id, latestStudentRecord?.id) {
+        mutableStateOf(existingRecord?.guideEmail?.ifBlank { null } ?: latestStudentRecord?.guideEmail.orEmpty())
     }
+    var guidePhone by remember(existingRecord?.id, assignedGuideAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.guidePhone?.ifBlank { null }
+                ?: assignedGuideAccount?.phone?.ifBlank { null }
+                ?: latestStudentRecord?.guidePhone.orEmpty()
+        )
+    }
+    var guideWhatsapp by remember(existingRecord?.id, assignedGuideAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.guideWhatsapp?.ifBlank { null }
+                ?: assignedGuideAccount?.phone?.ifBlank { null }
+                ?: latestStudentRecord?.guideWhatsapp.orEmpty()
+        )
+    }
+    var principalEmail by remember(existingRecord?.id, latestStudentRecord?.id) {
+        mutableStateOf(
+            prefillSource?.principalEmail?.ifBlank { "kkhmstorage@gmail.com" } ?: "kkhmstorage@gmail.com"
+        )
+    }
+    var referenceBooks by remember(existingRecord?.id) { mutableStateOf(existingRecord?.referenceBooks.orEmpty()) }
+    var selectedSlots by remember(existingRecord?.id, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.timetableSlots?.takeIf { it.isNotEmpty() }?.toSet()
+                ?: latestStudentRecord?.timetableSlots?.takeIf { it.isNotEmpty() }?.toSet()
+                ?: setOf("Monday:2", "Wednesday:5")
+        )
+    }
+
+    // Auto-fill Guide Name & Phone when guideUsername is typed/changed on new records
+    LaunchedEffect(guideUsername) {
+        val clean = guideUsername.trim().lowercase()
+        if (clean.length >= 3) {
+            val lookedUp = onLookupGuide(clean)
+            if (lookedUp != null) {
+                if (guideName.isBlank() || existingRecord == null) {
+                    guideName = lookedUp.displayName
+                }
+                if (guidePhone.isBlank() && lookedUp.phone.isNotBlank()) {
+                    guidePhone = lookedUp.phone
+                }
+                if (guideWhatsapp.isBlank() && lookedUp.phone.isNotBlank()) {
+                    guideWhatsapp = lookedUp.phone
+                }
+            }
+        }
+    }
+
+    val needsDetailsCheck = studentName.isBlank() || cicAdNo.isBlank() || classDepartment.isBlank() || guideName.isBlank()
+    var showPrefilledDetails by remember(existingRecord?.id) { mutableStateOf(needsDetailsCheck) }
+    var yearDropdownExpanded by remember { mutableStateOf(false) }
+    var semDropdownExpanded by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
@@ -134,88 +243,172 @@ fun OffCourseRecordFormScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // 1. Auto-Prefilled Summary Card (Collapsible)
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text(
+                                    text = "Pre-filled Student & Guide Details",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = listOfNotNull(
+                                        studentName.ifBlank { "Name needed" },
+                                        cicAdNo.ifBlank { null },
+                                        classDepartment.ifBlank { null },
+                                        selectedStream.label
+                                    ).joinToString(" • "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Guide: ${guideName.ifBlank { "Tap Edit to assign" }}${if (guideUsername.isNotBlank()) " (@$guideUsername)" else ""}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = { showPrefilledDetails = !showPrefilledDetails },
+                            modifier = Modifier.testTag("toggle_prefilled_details_button")
+                        ) {
+                            Icon(
+                                imageVector = if (showPrefilledDetails) Icons.Default.ExpandLess else Icons.Default.Edit,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (showPrefilledDetails) "Hide" else "Edit")
+                        }
+                    }
+
+                    AnimatedVisibility(visible = showPrefilledDetails) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            HorizontalDivider()
+                            OutlinedTextField(
+                                value = studentName,
+                                onValueChange = { studentName = it },
+                                label = { Text("Name of Student *") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_student_name")
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = cicAdNo,
+                                    onValueChange = { cicAdNo = it },
+                                    label = { Text("CIC Ad No *") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f).testTag("form_cic_ad_no")
+                                )
+                                OutlinedTextField(
+                                    value = clgAdNo,
+                                    onValueChange = { clgAdNo = it },
+                                    label = { Text("Clg Ad No") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            OutlinedTextField(
+                                value = classDepartment,
+                                onValueChange = { classDepartment = it },
+                                label = { Text("Class / Department *") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_class_dept")
+                            )
+                            Text("Programme Stream", style = MaterialTheme.typography.labelLarge)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                CicStream.entries.forEach { stream ->
+                                    FilterChip(
+                                        selected = selectedStream == stream,
+                                        onClick = { selectedStream = stream },
+                                        label = { Text(stream.label) }
+                                    )
+                                }
+                            }
+                            OutlinedTextField(
+                                value = collegeAfflName,
+                                onValueChange = { collegeAfflName = it },
+                                label = { Text("College Affl. & Name *") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_college_name")
+                            )
+
+                            HorizontalDivider()
+                            OutlinedTextField(
+                                value = guideUsername,
+                                onValueChange = { guideUsername = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
+                                label = { Text("Guide Portal Username (e.g. guide1)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_guide_username")
+                            )
+                            OutlinedTextField(
+                                value = guideName,
+                                onValueChange = { guideName = it },
+                                label = { Text("Name of Guide (Mentor) *") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_guide_name")
+                            )
+                            OutlinedTextField(
+                                value = guideEmail,
+                                onValueChange = { guideEmail = it },
+                                label = { Text("Guide Google Email (Optional)") },
+                                placeholder = { Text("teacher@college.edu") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("form_guide_email")
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = guidePhone,
+                                    onValueChange = { guidePhone = it },
+                                    label = { Text("Guide Phone") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = guideWhatsapp,
+                                    onValueChange = { guideWhatsapp = it },
+                                    label = { Text("WhatsApp Number") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            OutlinedTextField(
+                                value = principalEmail,
+                                onValueChange = { principalEmail = it },
+                                label = { Text("Principal / Dean Google Email") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2. Subject & Term Selection (Dropdowns!)
             Text(
-                text = "Page 1 — Student & Enrollment Details",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            OutlinedTextField(
-                value = studentName,
-                onValueChange = { studentName = it },
-                label = { Text("Name of Student *") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_student_name")
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = cicAdNo,
-                    onValueChange = { cicAdNo = it },
-                    label = { Text("CIC Ad No *") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).testTag("form_cic_ad_no")
-                )
-                OutlinedTextField(
-                    value = clgAdNo,
-                    onValueChange = { clgAdNo = it },
-                    label = { Text("Clg Ad No") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            OutlinedTextField(
-                value = classDepartment,
-                onValueChange = { classDepartment = it },
-                label = { Text("Class / Department *") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_class_dept")
-            )
-
-            Text("Academic Year", style = MaterialTheme.typography.labelLarge)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                availableYears.forEach { year ->
-                    FilterChip(
-                        selected = academicYear == year,
-                        onClick = { academicYear = year },
-                        label = { Text(year) }
-                    )
-                }
-            }
-
-            Text("Semester", style = MaterialTheme.typography.labelLarge)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                availableSemesters.forEach { sem ->
-                    FilterChip(
-                        selected = semester == sem,
-                        onClick = { semester = sem },
-                        label = { Text(sem) }
-                    )
-                }
-            }
-
-            Text("Programme Stream", style = MaterialTheme.typography.labelLarge)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CicStream.entries.forEach { stream ->
-                    FilterChip(
-                        selected = selectedStream == stream,
-                        onClick = { selectedStream = stream },
-                        label = { Text(stream.label) }
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = collegeAfflName,
-                onValueChange = { collegeAfflName = it },
-                label = { Text("College Affl. & Name *") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_college_name")
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            Text(
-                text = "Page 2 — Subject Details & Mentor Routing",
+                text = "Subject & Term Details",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -224,14 +417,86 @@ fun OffCourseRecordFormScreen(
                 value = subjectTitle,
                 onValueChange = { subjectTitle = it },
                 label = { Text("Off-Course Subject Title *") },
+                placeholder = { Text("e.g., Comparative Islamic Jurisprudence") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("form_subject_title")
             )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ExposedDropdownMenuBox(
+                    expanded = yearDropdownExpanded,
+                    onExpandedChange = { yearDropdownExpanded = !yearDropdownExpanded },
+                    modifier = Modifier.weight(1.2f)
+                ) {
+                    OutlinedTextField(
+                        value = academicYear,
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        label = { Text("Academic Year *") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = yearDropdownExpanded) },
+                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                            .testTag("form_year_dropdown")
+                    )
+                    ExposedDropdownMenu(
+                        expanded = yearDropdownExpanded,
+                        onDismissRequest = { yearDropdownExpanded = false }
+                    ) {
+                        availableYears.forEach { year ->
+                            DropdownMenuItem(
+                                text = { Text(year) },
+                                onClick = {
+                                    academicYear = year
+                                    yearDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = semDropdownExpanded,
+                    onExpandedChange = { semDropdownExpanded = !semDropdownExpanded },
+                    modifier = Modifier.weight(0.95f)
+                ) {
+                    OutlinedTextField(
+                        value = semester,
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        label = { Text("Semester *") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = semDropdownExpanded) },
+                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                            .testTag("form_semester_dropdown")
+                    )
+                    ExposedDropdownMenu(
+                        expanded = semDropdownExpanded,
+                        onDismissRequest = { semDropdownExpanded = false }
+                    ) {
+                        availableSemesters.forEach { sem ->
+                            DropdownMenuItem(
+                                text = { Text(sem) },
+                                onClick = {
+                                    semester = sem
+                                    semDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = proposalAppNo,
                     onValueChange = { proposalAppNo = it },
-                    label = { Text("Proposal App. No") },
+                    label = { Text("Proposal App. No (Optional)") },
                     singleLine = true,
                     modifier = Modifier.weight(1.4f)
                 )
@@ -244,63 +509,17 @@ fun OffCourseRecordFormScreen(
                     modifier = Modifier.weight(0.8f)
                 )
             }
-            OutlinedTextField(
-                value = guideName,
-                onValueChange = { guideName = it },
-                label = { Text("Name of Guide (Mentor) *") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_guide_name")
-            )
-            OutlinedTextField(
-                value = guideUsername,
-                onValueChange = { guideUsername = it.lowercase().filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
-                label = { Text("Guide Portal Username (e.g. guide1)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_guide_username")
-            )
-            OutlinedTextField(
-                value = guideEmail,
-                onValueChange = { guideEmail = it },
-                label = { Text("Guide Google Email (Optional)") },
-                placeholder = { Text("teacher@college.edu") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag("form_guide_email")
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = guidePhone,
-                    onValueChange = { guidePhone = it },
-                    label = { Text("Guide Phone") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedTextField(
-                    value = guideWhatsapp,
-                    onValueChange = { guideWhatsapp = it },
-                    label = { Text("WhatsApp Number") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            OutlinedTextField(
-                value = principalEmail,
-                onValueChange = { principalEmail = it },
-                label = { Text("Principal / Dean Google Email") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+
             OutlinedTextField(
                 value = referenceBooks,
                 onValueChange = { referenceBooks = it },
-                label = { Text("Reference Books & Materials") },
+                label = { Text("Reference Books & Materials (Optional)") },
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier.fillMaxWidth()
             )
 
-            com.example.ui.components.TimetableMatrixGrid(
+            TimetableMatrixGrid(
                 selectedSlots = selectedSlots,
                 editable = true,
                 onToggleSlot = { key ->
@@ -309,26 +528,36 @@ fun OffCourseRecordFormScreen(
             )
 
             if (validationError != null) {
-                Text(
-                    text = validationError.orEmpty(),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = validationError.orEmpty(),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
             }
 
             Button(
                 onClick = {
                     val missing = when {
-                        studentName.isBlank() -> "Please enter Student Name."
-                        cicAdNo.isBlank() -> "Please enter CIC Admission Number."
+                        studentName.isBlank() -> "Please enter Student Name (tap Edit on Details card)."
+                        cicAdNo.isBlank() -> "Please enter CIC Admission Number (tap Edit on Details card)."
                         classDepartment.isBlank() -> "Please enter Class / Department."
                         collegeAfflName.isBlank() -> "Please enter College Affl. & Name."
-                        subjectTitle.isBlank() -> "Please enter Subject Title."
-                        guideName.isBlank() -> "Please enter Name of Guide."
+                        subjectTitle.isBlank() -> "Please enter Off-Course Subject Title."
+                        guideName.isBlank() -> "Please enter Name of Guide (tap Edit on Details card)."
                         else -> null
                     }
                     if (missing != null) {
                         validationError = missing
+                        if (studentName.isBlank() || cicAdNo.isBlank() || classDepartment.isBlank() || guideName.isBlank()) {
+                            showPrefilledDetails = true
+                        }
                     } else {
                         validationError = null
                         val base = existingRecord ?: OffCourseRecord()
@@ -376,7 +605,7 @@ fun OffCourseRecordFormScreen(
                 } else {
                     Icon(Icons.Default.Check, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Save Digitized Off-Course Record")
+                    Text("Save Off-Course Record")
                 }
             }
             Spacer(Modifier.height(24.dp))
