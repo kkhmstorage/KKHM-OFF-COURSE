@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -25,11 +25,19 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+      - name: Prepare Android SDK licenses
+        run: |
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "Using Android SDK at: $SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          SDKMANAGER_BIN="$(command -v sdkmanager || find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
+          if [ -n "$SDKMANAGER_BIN" ]; then
+            yes | "$SDKMANAGER_BIN" --licenses >/dev/null 2>&1 || true
+          else
+            mkdir -p "$SDK_DIR/licenses"
+            printf '\n24333f8a63b6825ea9c5514f83c2829b004d1fee' > "$SDK_DIR/licenses/android-sdk-license"
+            printf '\n84831b9409646a918e30573bab4c9c91346d8abd' > "$SDK_DIR/licenses/android-sdk-preview-license"
+          fi
 
       - name: Prepare debug keystore
         env:
@@ -71,7 +79,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.3.1'
 
@@ -92,3 +100,15 @@ jobs:
           name: KKHM-Off-Course-Debug-APK
           path: dist/KKHM-Off-Course-debug.apk
           retention-days: 30
+
+      - name: Publish Debug APK to latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest dist/KKHM-Off-Course-debug.apk --clobber
+          else
+            gh release create latest dist/KKHM-Off-Course-debug.apk \
+              --title "KKHM Off-Course (Latest Debug APK)" \
+              --notes "Latest Android Debug APK for KKHM Islamic & Arts College."
+          fi
