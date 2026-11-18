@@ -195,6 +195,7 @@ fun AuthenticatedShell(
     val isActionInProgress by viewModel.isActionInProgress.collectAsStateWithLifecycle()
     val portalLoginError by viewModel.portalLoginError.collectAsStateWithLifecycle()
     val seededCredentials by viewModel.seededCredentialsDialog.collectAsStateWithLifecycle()
+    val bulkImportState by viewModel.bulkImportState.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -421,7 +422,11 @@ fun AuthenticatedShell(
                             navController.navigate(Routes.recordDetail(id))
                         },
                         onReassignGuide = viewModel::adminReassignGuide,
-                        onDeleteRecord = { id -> viewModel.deleteRecord(id) }
+                        onDeleteRecord = { id -> viewModel.deleteRecord(id) },
+                        bulkImportState = bulkImportState,
+                        onStartBulkImport = viewModel::startBulkUserImport,
+                        onResetBulkImport = viewModel::resetBulkImportState,
+                        onShowMessage = viewModel::showMessage
                     )
                 }
             }

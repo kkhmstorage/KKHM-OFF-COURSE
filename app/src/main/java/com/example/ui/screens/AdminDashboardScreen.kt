@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -68,6 +69,8 @@ import com.example.data.model.OffCourseRecord
 import com.example.data.model.SignatureStatus
 import com.example.data.model.UiState
 import com.example.data.model.UserRole
+import com.example.data.remote.BulkImportRow
+import com.example.data.remote.BulkImportUiState
 import com.example.data.remote.SeededCredential
 import com.example.ui.components.AcademicTermFilterBar
 import com.example.ui.components.StatusBadge
@@ -95,6 +98,10 @@ fun AdminDashboardScreen(
     onOpenRecord: (String) -> Unit,
     onReassignGuide: (String, String, String, String) -> Unit,
     onDeleteRecord: (String) -> Unit,
+    bulkImportState: BulkImportUiState = BulkImportUiState(),
+    onStartBulkImport: (List<BulkImportRow>) -> Unit = {},
+    onResetBulkImport: () -> Unit = {},
+    onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedSection by remember { mutableIntStateOf(0) }
@@ -104,6 +111,7 @@ fun AdminDashboardScreen(
     var isCreatingNew by remember { mutableStateOf(false) }
     var resetPasswordFor by remember { mutableStateOf<CollegeAccount?>(null) }
     var reassignGuideFor by remember { mutableStateOf<OffCourseRecord?>(null) }
+    var showBulkImportDialog by remember { mutableStateOf(false) }
 
     val accounts = (accountsState as? UiState.Success)?.data.orEmpty()
     val records = (recordsState as? UiState.Success)?.data.orEmpty()
@@ -142,7 +150,11 @@ fun AdminDashboardScreen(
                 onResetPassword = { resetPasswordFor = it },
                 onToggleStatus = onToggleAccountStatus,
                 onDeleteUser = onDeleteAccount,
-                onSeedSamples = onSeedSampleAccounts
+                onSeedSamples = onSeedSampleAccounts,
+                onBulkImport = {
+                    onResetBulkImport()
+                    showBulkImportDialog = true
+                }
             )
         } else {
             AdminRecordsTab(
@@ -252,6 +264,20 @@ fun AdminDashboardScreen(
             }
         )
     }
+
+    if (showBulkImportDialog) {
+        BulkUserImportDialog(
+            existingUsernames = accounts.map { it.username }.toSet(),
+            importState = bulkImportState,
+            onStartImport = onStartBulkImport,
+            onResetImportState = onResetBulkImport,
+            onShowMessage = onShowMessage,
+            onDismiss = {
+                onResetBulkImport()
+                showBulkImportDialog = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -265,7 +291,8 @@ private fun AdminUsersTab(
     onResetPassword: (CollegeAccount) -> Unit,
     onToggleStatus: (String, AccountStatus) -> Unit,
     onDeleteUser: (String) -> Unit,
-    onSeedSamples: () -> Unit
+    onSeedSamples: () -> Unit,
+    onBulkImport: () -> Unit
 ) {
     val filtered = accounts.filter { acc ->
         searchQuery.isBlank() ||
@@ -312,6 +339,14 @@ private fun AdminUsersTab(
                             Spacer(Modifier.width(6.dp))
                             Text("Sample Users")
                         }
+                    }
+                    OutlinedButton(
+                        onClick = onBulkImport,
+                        modifier = Modifier.fillMaxWidth().testTag("admin_bulk_import_button")
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Bulk Import Users (Download / Upload CSV Template)")
                     }
                 }
             }

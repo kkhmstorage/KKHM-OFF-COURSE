@@ -19,6 +19,8 @@ import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.data.model.WeekVerificationStatus
 import com.example.data.model.WeeklyStudyReport
+import com.example.data.remote.BulkImportRow
+import com.example.data.remote.BulkImportUiState
 import com.example.data.remote.CollegeAccountRepository
 import com.example.data.remote.OffCourseRepository
 import com.example.data.remote.SeededCredential
@@ -72,6 +74,9 @@ class MainViewModel(
 
     private val _seededCredentialsDialog = MutableStateFlow<List<SeededCredential>>(emptyList())
     val seededCredentialsDialog: StateFlow<List<SeededCredential>> = _seededCredentialsDialog.asStateFlow()
+
+    private val _bulkImportState = MutableStateFlow(BulkImportUiState())
+    val bulkImportState: StateFlow<BulkImportUiState> = _bulkImportState.asStateFlow()
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
@@ -399,6 +404,39 @@ class MainViewModel(
             }
             _isActionInProgress.value = false
         }
+    }
+
+    fun startBulkUserImport(rows: List<BulkImportRow>) {
+        val validRows = rows.filter { it.isValid }
+        if (validRows.isEmpty()) {
+            showMessage("No valid rows available to import.")
+            return
+        }
+        viewModelScope.launch {
+            _isActionInProgress.value = true
+            _bulkImportState.value = BulkImportUiState(
+                isImporting = true,
+                processedCount = 0,
+                totalCount = validRows.size
+            )
+            val result = accountRepository.bulkImportAccounts(validRows) { processed, total ->
+                _bulkImportState.value = _bulkImportState.value.copy(
+                    isImporting = true,
+                    processedCount = processed,
+                    totalCount = total
+                )
+            }
+            _bulkImportState.value = result
+            _isActionInProgress.value = false
+            _snackbarEvents.emit(
+                "Bulk import complete: ${result.createdCount} created, ${result.updatedCount} updated" +
+                    if (result.failedRows.isNotEmpty()) ", ${result.failedRows.size} failed" else ""
+            )
+        }
+    }
+
+    fun resetBulkImportState() {
+        _bulkImportState.value = BulkImportUiState()
     }
 
     fun adminReassignGuide(recordId: String, guideUsername: String, guideName: String, guideEmail: String) {

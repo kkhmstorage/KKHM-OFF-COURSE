@@ -388,6 +388,57 @@ class CollegeAccountRepository(
         }
     }
 
+    suspend fun bulkImportAccounts(
+        rows: List<BulkImportRow>,
+        onProgress: (processed: Int, total: Int) -> Unit = { _, _ -> }
+    ): BulkImportUiState {
+        val validRows = rows.filter { it.isValid }
+        val total = validRows.size
+        var created = 0
+        var updated = 0
+        val failed = mutableListOf<Pair<String, String>>()
+
+        validRows.forEachIndexed { index, row ->
+            val username = PasswordHasher.normalizeUsername(row.username)
+            val alreadyExists = try {
+                db.collection("college_accounts").document(username).get().await().exists()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                row.isExistingUpdate
+            }
+
+            val res = saveCollegeAccount(
+                rawUsername = username,
+                displayName = row.displayName,
+                role = row.role,
+                rawPasswordOrNull = row.passwordOrNull,
+                accountStatus = row.accountStatus,
+                cicAdNo = row.cicAdNo,
+                classDepartment = row.classDepartment,
+                stream = row.stream,
+                assignedGuideUsername = row.assignedGuideUsername,
+                phone = row.phone
+            )
+            if (res.isSuccess) {
+                if (alreadyExists) updated++ else created++
+            } else {
+                failed += username to (res.exceptionOrNull()?.localizedMessage ?: "Failed to save account")
+            }
+            onProgress(index + 1, total)
+        }
+
+        return BulkImportUiState(
+            isImporting = false,
+            processedCount = total,
+            totalCount = total,
+            createdCount = created,
+            updatedCount = updated,
+            failedRows = failed,
+            completed = true
+        )
+    }
+
     private suspend fun syncDeviceProfileRole(account: CollegeAccount) {
         val uid = auth.currentUser?.uid ?: return
         val effectiveRole = if (account.role == UserRole.ADMIN.name) UserRole.PRINCIPAL.name else account.role
