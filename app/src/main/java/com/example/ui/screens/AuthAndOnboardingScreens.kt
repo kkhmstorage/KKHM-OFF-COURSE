@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
@@ -206,12 +207,14 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
                 ) {
-                    Text(
-                        text = errorMessage.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(12.dp)
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
                 }
             }
 
@@ -231,9 +234,9 @@ fun AuthScreen(
                             errorMessage = msg
                         },
                         scope = scope,
-                        onAuthCancelled = {
+                        onAuthCancelled = { detail ->
                             isLoading = false
-                            errorMessage = "Google Sign-In did not complete. Please select your Google account again. If this repeats after installing an update, uninstall the old APK and install the latest release signed with the official KKHM keystore."
+                            errorMessage = detail
                         }
                     )
                 },
