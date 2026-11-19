@@ -6,7 +6,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.core.content.FileProvider
 import com.example.data.model.AccountStatus
+import com.example.data.model.CIC_DAYS
 import com.example.data.model.CicStream
+import com.example.data.model.GuideType
 import com.example.data.model.UserRole
 import java.io.File
 import java.io.FileOutputStream
@@ -23,10 +25,22 @@ data class BulkImportRow(
     val stream: String,
     val assignedGuideUsername: String,
     val phone: String,
+    val email: String = "",
+    val guideType: String = "",
+    val institution: String = "",
+    val academicYear: String = "",
+    val semester: String = "",
+    val offCourseSubject: String = "",
+    val exemptedSubject: String = "",
+    val credit: Long = 4L,
+    val timetableSlots: List<String> = emptyList(),
+    val proposalAppNo: String = "",
+    val referenceBooks: String = "",
     val isExistingUpdate: Boolean,
     val validationError: String? = null
 ) {
     val isValid: Boolean get() = validationError == null
+    val hasOffCourseEnrollment: Boolean get() = role == UserRole.STUDENT && offCourseSubject.isNotBlank()
 }
 
 data class BulkCsvParseResult(
@@ -38,6 +52,7 @@ data class BulkCsvParseResult(
     val invalidRows: List<BulkImportRow> get() = rows.filterNot { it.isValid }
     val newCount: Int get() = validRows.count { !it.isExistingUpdate }
     val updateCount: Int get() = validRows.count { it.isExistingUpdate }
+    val offCourseEnrollCount: Int get() = validRows.count { it.hasOffCourseEnrollment }
 }
 
 data class BulkImportUiState(
@@ -46,13 +61,14 @@ data class BulkImportUiState(
     val totalCount: Int = 0,
     val createdCount: Int = 0,
     val updatedCount: Int = 0,
+    val enrolledRecordsCount: Int = 0,
     val failedRows: List<Pair<String, String>> = emptyList(),
     val completed: Boolean = false
 )
 
 object BulkUserCsvHelper {
 
-    const val TEMPLATE_FILE_NAME = "kkhm_bulk_users_template.csv"
+    const val TEMPLATE_FILE_NAME = "kkhm_bulk_users_offcourse_template.csv"
     private const val MAX_FILE_BYTES = 2 * 1024 * 1024L
     private const val MAX_ROWS = 500
 
@@ -66,17 +82,29 @@ object BulkUserCsvHelper {
         "class_department",
         "stream",
         "assigned_guide_username",
-        "phone"
+        "phone",
+        "email",
+        "guide_type",
+        "institution",
+        "academic_year",
+        "semester",
+        "off_course_subject",
+        "exempted_subject",
+        "credit",
+        "timetable_slots",
+        "proposal_app_no",
+        "reference_books"
     )
 
     fun buildTemplateCsv(): String {
         val sb = StringBuilder()
         sb.append('\uFEFF') // UTF-8 BOM for clean Excel / Sheets opening
         sb.appendLine(EXPECTED_COLUMNS.joinToString(","))
-        sb.appendLine("guide_kareem,Usthad Abdul Kareem,guide@2026,GUIDE,ACTIVE,,Arabic & Islamic Studies,,,9847000001")
-        sb.appendLine("prin_hussain,Dr. Hussain Maulavi,prin@2026,PRINCIPAL,ACTIVE,,Administration,,,9847000002")
-        sb.appendLine("student_aysha,Aysha Nasrin,kkhm@2026,STUDENT,ACTIVE,CIC-2026-101,Final Wafiyya,Wafiyya,guide_kareem,9847000003")
-        sb.appendLine("student_bilal,Muhammed Bilal,kkhm@2026,STUDENT,ACTIVE,CIC-2026-102,Second Wafy Arts,Wafy Arts,guide_kareem,9847000004")
+        sb.appendLine("guide_kareem,Usthad Abdul Kareem,guide@2026,GUIDE,ACTIVE,,Arabic & Islamic Studies,,,9847000001,kareem@kkhm.edu,COLLEGE_FACULTY,KKHM Islamic & Arts College,,,,,,,,")
+        sb.appendLine("ext_guide_salim,Dr. Salim Nadwi,guide@2026,GUIDE,ACTIVE,,External Research Mentor,,,9847000010,salim@external.org,EXTERNAL,Calicut Arabic Research Centre,,,,,,,,")
+        sb.appendLine("prin_hussain,Dr. Hussain Maulavi,prin@2026,PRINCIPAL,ACTIVE,,Administration,,,9847000002,principal@kkhm.edu,,KKHM Islamic & Arts College,,,,,,,,")
+        sb.appendLine("student_aysha,Aysha Nasrin,kkhm@2026,STUDENT,ACTIVE,CIC-2026-101,Final Wafiyya,Wafiyya,guide_kareem,9847000003,,,,2026 - 2027,Nov,Comparative Islamic Jurisprudence,Classical Usul II,4,Monday:2;Wednesday:5,OC-2026-01,Al-Muwafaqat")
+        sb.appendLine("student_bilal,Muhammed Bilal,kkhm@2026,STUDENT,ACTIVE,CIC-2026-102,Second Wafy Arts,Wafy Arts,ext_guide_salim,9847000004,,,,2026 - 2027,Nov,Arabic Rhetoric & Journalism,Modern Prose Paper,4,Tuesday:3;Thursday:6,OC-2026-02,Al-Balagha al-Wadiha")
         return sb.toString()
     }
 
@@ -109,10 +137,10 @@ object BulkUserCsvHelper {
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "KKHM Off-Course Bulk Users CSV Template")
+                putExtra(Intent.EXTRA_SUBJECT, "KKHM Off-Course Bulk Users & Courses CSV Template")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            val chooser = Intent.createChooser(intent, "Share KKHM Bulk User Template (.csv)")
+            val chooser = Intent.createChooser(intent, "Share KKHM Bulk Import Template (.csv)")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
             Result.success(Unit)
@@ -230,6 +258,17 @@ object BulkUserCsvHelper {
             val rawStream = cell("stream")
             val guideUser = PasswordHasher.normalizeUsername(cell("assigned_guide_username")).take(40)
             val phone = cell("phone").take(30)
+            val email = cell("email").lowercase().take(120)
+            val rawGuideType = cell("guide_type")
+            val institution = cell("institution").take(160)
+            val academicYear = cell("academic_year").take(20)
+            val semester = cell("semester").take(30)
+            val offCourseSubject = cell("off_course_subject").take(160)
+            val exemptedSubject = cell("exempted_subject").take(160)
+            val rawCredit = cell("credit")
+            val rawSlots = cell("timetable_slots")
+            val proposalAppNo = cell("proposal_app_no").take(60)
+            val referenceBooks = cell("reference_books").take(600)
 
             val isExisting = username in existingSet
             val errors = mutableListOf<String>()
@@ -282,6 +321,19 @@ object BulkUserCsvHelper {
                 ""
             }
 
+            val resolvedGuideType = if (roleSafe == UserRole.GUIDE) {
+                when (rawGuideType.trim().uppercase()) {
+                    "", "COLLEGE", "COLLEGE_FACULTY", "FACULTY", "TEACHER", "COLLEGE TEACHER" -> GuideType.COLLEGE_FACULTY.name
+                    "EXTERNAL", "NON_COLLEGE", "NON-COLLEGE", "GUEST" -> GuideType.EXTERNAL.name
+                    else -> GuideType.COLLEGE_FACULTY.name
+                }
+            } else {
+                ""
+            }
+
+            val parsedSlots = parseTimetableSlots(rawSlots)
+            val parsedCredit = (rawCredit.toLongOrNull() ?: 4L).coerceIn(0L, 20L)
+
             BulkImportRow(
                 rowNumber = csvLineNumber,
                 username = username.ifBlank { rawUsername },
@@ -294,6 +346,17 @@ object BulkUserCsvHelper {
                 stream = resolvedStream,
                 assignedGuideUsername = if (roleSafe == UserRole.STUDENT) guideUser else "",
                 phone = phone,
+                email = email,
+                guideType = resolvedGuideType,
+                institution = institution,
+                academicYear = academicYear,
+                semester = semester,
+                offCourseSubject = offCourseSubject,
+                exemptedSubject = exemptedSubject,
+                credit = parsedCredit,
+                timetableSlots = parsedSlots,
+                proposalAppNo = proposalAppNo,
+                referenceBooks = referenceBooks,
                 isExistingUpdate = isExisting,
                 validationError = errors.firstOrNull()
             )
@@ -304,6 +367,26 @@ object BulkUserCsvHelper {
             rows = parsed,
             fatalError = null
         )
+    }
+
+    fun parseTimetableSlots(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(';', '|', '/')
+            .mapNotNull { token ->
+                val parts = token.trim().split(':')
+                if (parts.size != 2) return@mapNotNull null
+                val dayRaw = parts[0].trim()
+                val matchedDay = CIC_DAYS.firstOrNull {
+                    it.equals(dayRaw, ignoreCase = true) ||
+                        it.take(3).equals(dayRaw.take(3), ignoreCase = true)
+                } ?: return@mapNotNull null
+                val period = parts[1].trim().removePrefix("P").removePrefix("p").toIntOrNull()
+                    ?: return@mapNotNull null
+                if (period !in 1..8) return@mapNotNull null
+                "$matchedDay:$period"
+            }
+            .distinct()
+            .take(49)
     }
 
     private fun normalizeHeader(raw: String): String =
@@ -320,7 +403,18 @@ object BulkUserCsvHelper {
             "class_department" to listOf("class_department", "department", "class", "class_dept"),
             "stream" to listOf("stream", "cic_stream"),
             "assigned_guide_username" to listOf("assigned_guide_username", "guide_username", "guide", "mentor_username"),
-            "phone" to listOf("phone", "mobile", "whatsapp")
+            "phone" to listOf("phone", "mobile", "whatsapp"),
+            "email" to listOf("email", "mail", "email_id"),
+            "guide_type" to listOf("guide_type", "mentor_type"),
+            "institution" to listOf("institution", "college", "organization"),
+            "academic_year" to listOf("academic_year", "year"),
+            "semester" to listOf("semester", "sem"),
+            "off_course_subject" to listOf("off_course_subject", "subject_title", "off_course", "subject"),
+            "exempted_subject" to listOf("exempted_subject", "dropped_subject", "exempted", "skipped_subject"),
+            "credit" to listOf("credit", "credits"),
+            "timetable_slots" to listOf("timetable_slots", "timetable", "slots", "periods"),
+            "proposal_app_no" to listOf("proposal_app_no", "proposal_no", "app_no"),
+            "reference_books" to listOf("reference_books", "references", "books")
         )
         val result = mutableMapOf<String, Int>()
         aliases.forEach { (canonical, keys) ->
@@ -334,7 +428,7 @@ object BulkUserCsvHelper {
         val clean = raw.trim().lowercase()
         return when (clean) {
             "", "student" -> if (clean.isEmpty()) null else UserRole.STUDENT
-            "guide", "guide (mentor)", "mentor", "teacher" -> UserRole.GUIDE
+            "guide", "guide (mentor)", "mentor", "teacher", "external guide" -> UserRole.GUIDE
             "principal", "principal / dean", "dean" -> UserRole.PRINCIPAL
             "admin", "college admin" -> UserRole.ADMIN
             else -> null

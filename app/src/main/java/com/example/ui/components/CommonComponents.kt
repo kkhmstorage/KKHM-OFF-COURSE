@@ -661,6 +661,14 @@ fun PeriodLogsBreakdown(
                             contentColor = badgeFg
                         )
                     }
+                    if (entry.activityType.isNotBlank()) {
+                        Text(
+                            text = "Activity: ${entry.activityType}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                     Text(
                         text = entry.note.ifBlank {
                             if (entry.effectiveness == "MISSED") "Period marked as missed."

@@ -410,5 +410,209 @@ test("Guide sees records assigned via guideUsername even when guideEmail is empt
         updatedAt: new Date(Date.now() - 500),
       })
   );
+
+  // Once VERIFIED by Guide, Student cannot overwrite week_01
+  await assertFails(
+    studentDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .doc("week_01")
+      .update({
+        description: "Tampered after approval",
+        updatedAt: new Date(Date.now() - 100),
+      })
+  );
 });
+
+test("Admin pre-enrolls student with exemptedSubject & external guide; student logs Week 1; Principal lists campus records", async () => {
+  const now = new Date(Date.now() - 5000);
+  const PRINCIPAL_UID = "principal_kkhm_505";
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: ADMIN_EMAIL,
+    email_verified: true,
+  }).firestore();
+  const studentDb = testEnv.authenticatedContext(STUDENT_UID, {
+    email: "student.personal@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const principalDb = testEnv.authenticatedContext(PRINCIPAL_UID, {
+    email: "principal.personal@gmail.com",
+    email_verified: true,
+  }).firestore();
+
+  // Admin creates external guide, student, and portal principal accounts with email/guideType/institution
+  await assertSucceeds(
+    adminDb.collection("college_accounts").doc("extguide1").set({
+      username: "extguide1",
+      displayName: "Dr. Salim Nadwi",
+      role: "GUIDE",
+      guideType: "EXTERNAL",
+      institution: "Calicut Arabic Research Centre",
+      email: "salim@external.org",
+      passwordSalt: "salt_ext_12345",
+      passwordHash: "d".repeat(64),
+      accountStatus: "ACTIVE",
+      cicAdNo: "",
+      classDepartment: "External Research",
+      stream: "",
+      assignedGuideUsername: "",
+      phone: "+919800000099",
+      boundUid: "",
+      createdByUid: ADMIN_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    adminDb.collection("college_accounts").doc("student_a").set({
+      username: "student_a",
+      displayName: "Aysha Nasrin",
+      role: "STUDENT",
+      email: "aysha@kkhm.edu",
+      passwordSalt: "salt_stu_12345",
+      passwordHash: "e".repeat(64),
+      accountStatus: "ACTIVE",
+      cicAdNo: "CIC-2026-201",
+      classDepartment: "Final Wafiyya",
+      stream: "Wafiyya",
+      assignedGuideUsername: "extguide1",
+      phone: "+919800000055",
+      boundUid: "",
+      createdByUid: ADMIN_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    adminDb.collection("college_accounts").doc("principal1").set({
+      username: "principal1",
+      displayName: "Dr. Hussain Maulavi",
+      role: "PRINCIPAL",
+      institution: "KKHM Islamic & Arts College",
+      email: "principal@kkhm.edu",
+      passwordSalt: "salt_prin_1234",
+      passwordHash: "f".repeat(64),
+      accountStatus: "ACTIVE",
+      cicAdNo: "",
+      classDepartment: "Administration",
+      stream: "",
+      assignedGuideUsername: "",
+      phone: "+919800000002",
+      boundUid: "",
+      createdByUid: ADMIN_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Admin creates Off-Course record on behalf of student_a before student first signs in
+  const adminEnrolledRecord = {
+    ...buildRecordPayload(now),
+    studentUid: "pending_student_a",
+    studentUsername: "student_a",
+    studentName: "Aysha Nasrin",
+    cicAdNo: "CIC-2026-201",
+    exemptedSubject: "Classical Usul II",
+    guideUsername: "extguide1",
+    guideName: "Dr. Salim Nadwi",
+    guideType: "EXTERNAL",
+  };
+  const recordId = "rec_admin_enrolled_student_a";
+  await assertSucceeds(
+    adminDb.collection("off_course_records").doc(recordId).set(adminEnrolledRecord)
+  );
+
+  // Student binds account & portalUsername, then reads pre-enrolled record and logs Week 1
+  await assertSucceeds(
+    studentDb.collection("college_accounts").doc("student_a").update({
+      boundUid: STUDENT_UID,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+  await assertSucceeds(
+    studentDb.collection("users").doc(STUDENT_UID).set({
+      userId: STUDENT_UID,
+      portalUsername: "student_a",
+      displayName: "Aysha Nasrin",
+      email: "student.personal@gmail.com",
+      role: "STUDENT",
+      darkModePreference: "SYSTEM",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    studentDb.collection("off_course_records").where("studentUsername", "==", "student_a").get()
+  );
+  await assertSucceeds(
+    studentDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .doc("week_01")
+      .set({
+        recordId: recordId,
+        studentUid: STUDENT_UID,
+        studentUsername: "student_a",
+        guideUsername: "extguide1",
+        guideEmail: "salim@external.org",
+        principalEmail: ADMIN_EMAIL,
+        weekNumber: 1,
+        dateFrom: "02/11/2026",
+        dateTo: "08/11/2026",
+        description: "Studied Al-Muwafaqat chapter 1",
+        allocatedPeriods: 3,
+        utilizedPeriods: 3,
+        focusRating: 5,
+        utilizationNotes: "Authentic period work",
+        periodLogs: ["Monday|P2|EFFECTIVE|45m|Reading / Textbook|Studied Al-Muwafaqat chapter 1"],
+        verificationStatus: "PENDING",
+        createdAt: now,
+        updatedAt: now,
+      })
+  );
+
+  // Student can edit their own PENDING week before Guide approval
+  await assertSucceeds(
+    studentDb
+      .collection("off_course_records")
+      .doc(recordId)
+      .collection("weekly_reports")
+      .doc("week_01")
+      .update({
+        description: "Updated authentic study notes for chapter 1",
+        updatedAt: new Date(Date.now() - 400),
+      })
+  );
+
+  // Principal binds account & lists all campus records + weekly reports
+  await assertSucceeds(
+    principalDb.collection("college_accounts").doc("principal1").update({
+      boundUid: PRINCIPAL_UID,
+      updatedAt: new Date(Date.now() - 900),
+    })
+  );
+  await assertSucceeds(
+    principalDb.collection("users").doc(PRINCIPAL_UID).set({
+      userId: PRINCIPAL_UID,
+      portalUsername: "principal1",
+      displayName: "Dr. Hussain Maulavi",
+      email: "principal.personal@gmail.com",
+      role: "PRINCIPAL",
+      darkModePreference: "SYSTEM",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(principalDb.collection("off_course_records").get());
+  await assertSucceeds(
+    principalDb.collection("off_course_records").doc(recordId).collection("weekly_reports").get()
+  );
+});
+
 

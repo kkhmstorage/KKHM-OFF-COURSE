@@ -4,7 +4,6 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,8 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
@@ -67,12 +65,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.local.NotificationPreferences
+import com.example.data.model.GuideType
 import com.example.data.model.OffCourseRecord
 import com.example.data.model.RecordStatus
 import com.example.data.model.SignatureStatus
 import com.example.data.model.UiState
 import com.example.data.model.UserRole
 import com.example.data.model.WeekVerificationStatus
+import com.example.data.model.WeeklyLockState
 import com.example.data.model.WeeklyScheduleHelper
 import com.example.data.model.WeeklyStudyReport
 import com.example.ui.components.PeriodLogsBreakdown
@@ -82,6 +82,7 @@ import com.example.ui.components.UtilizationGaugeRing
 import com.example.ui.components.WeeklyUtilizationBarChart
 import com.example.ui.components.signatureStatusColors
 import com.example.ui.components.weekStatusColors
+import com.example.ui.theme.VerifiedGreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,7 +122,7 @@ fun RecordBookDetailScreen(
 
     val record = (recordState as? UiState.Success)?.data
     val reports = (reportsState as? UiState.Success)?.data.orEmpty()
-    val nextPendingWeek = remember(reports) { WeeklyScheduleHelper.nextPendingWeek(reports) }
+    val lockState = remember(reports) { WeeklyScheduleHelper.resolveWeeklyLockState(reports) }
 
     LaunchedEffect(initialOpenNextWeek, record?.id, reportsState) {
         if (initialOpenNextWeek && !autoOpenedNextWeek && record != null && reportsState is UiState.Success) {
@@ -130,7 +131,11 @@ fun RecordBookDetailScreen(
             if (record.recordStatus != RecordStatus.ARCHIVED.name &&
                 (record.studentUid == currentUserId || activeRole == UserRole.STUDENT)
             ) {
-                editingWeekNumber = nextPendingWeek
+                val targetWeek = lockState.nextUnlockedWeek
+                    ?: lockState.blockingUnverifiedReport?.weekNumber?.toInt()
+                if (targetWeek != null) {
+                    editingWeekNumber = targetWeek
+                }
             }
         }
     }
@@ -204,11 +209,11 @@ fun RecordBookDetailScreen(
                 0 -> OverviewTab(
                     record = record,
                     reports = reports,
-                    nextPendingWeek = nextPendingWeek,
+                    lockState = lockState,
                     activeRole = activeRole,
                     currentUserId = currentUserId,
                     onOpenStudyReportsTab = { selectedTab = 1 },
-                    onFillNextWeek = { wk ->
+                    onFillWeek = { wk ->
                         selectedTab = 1
                         editingWeekNumber = wk
                     },
@@ -221,7 +226,7 @@ fun RecordBookDetailScreen(
                     record = record,
                     reportsState = reportsState,
                     reports = reports,
-                    nextPendingWeek = nextPendingWeek,
+                    lockState = lockState,
                     activeRole = activeRole,
                     currentUserId = currentUserId,
                     onEditWeek = { week -> editingWeekNumber = week },
@@ -317,11 +322,11 @@ fun RecordBookDetailScreen(
 private fun OverviewTab(
     record: OffCourseRecord,
     reports: List<WeeklyStudyReport>,
-    nextPendingWeek: Int,
+    lockState: WeeklyLockState,
     activeRole: UserRole,
     currentUserId: String,
     onOpenStudyReportsTab: () -> Unit,
-    onFillNextWeek: (Int) -> Unit,
+    onFillWeek: (Int) -> Unit,
     onSubmitForReview: () -> Unit,
     onExportPdf: () -> Unit,
     onOpenGuideSign: () -> Unit,
@@ -335,45 +340,82 @@ private fun OverviewTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Quick Action Card at the Top
+        // Quick Action / Guide Approval Gate Card at Top
         if (isStudentOwner && record.recordStatus != RecordStatus.ARCHIVED.name) {
             item {
-                Card(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                val blocking = lockState.blockingUnverifiedReport
+                if (blocking != null) {
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier.fillMaxWidth().testTag("overview_guide_approval_lock_card")
                     ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "Next Pending Report: Week $nextPendingWeek",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = "Log what you did in each period for Week $nextPendingWeek (details pre-filled).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                        Button(
-                            onClick = { onFillNextWeek(nextPendingWeek) },
-                            modifier = Modifier.testTag("overview_fill_next_week_button")
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Fill W$nextPendingWeek")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                Text(
+                                    text = "Week ${blocking.weekNumber} Waiting for Guide Approval",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                            Text(
+                                text = "Please approach your Guide (${record.guideName}) to approve Week ${blocking.weekNumber} before adding Week ${blocking.weekNumber + 1}.\nഗൈഡിൻ്റെ അപ്രൂവൽ ലഭിക്കാതെ അടുത്ത ആഴ്ചയിലെ റെക്കോർഡ് ചേർക്കാൻ കഴിയില്ല — അപ്രൂവലിനായി ഗൈഡിനെ സമീപിക്കുക.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            OutlinedButton(onClick = { onFillWeek(blocking.weekNumber.toInt()) }) {
+                                Text("Edit / Review Week ${blocking.weekNumber}")
+                            }
+                        }
+                    }
+                } else if (lockState.nextUnlockedWeek != null) {
+                    val nextWk = lockState.nextUnlockedWeek
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "Ready to Log: Week $nextWk",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = "Log what you genuinely studied in each scheduled period (${record.periodsPerWeek} periods/wk).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Button(
+                                onClick = { onFillWeek(nextWk) },
+                                modifier = Modifier.testTag("overview_fill_next_week_button")
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Fill W$nextWk")
+                            }
                         }
                     }
                 }
             }
         } else {
             item {
+                val pendingCount = reports.count { it.verificationStatus != WeekVerificationStatus.VERIFIED.name }
                 Card(
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
@@ -386,13 +428,13 @@ private fun OverviewTab(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "${reports.size} Weekly Study Report(s) Logged",
+                                text = "${reports.size} Weekly Report(s) • $pendingCount Pending Approval",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                             Text(
-                                text = "View period-by-period notes of what the student did and verify reports.",
+                                text = "Inspect period-by-period study logs and approve each week to unlock the next week.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -401,7 +443,7 @@ private fun OverviewTab(
                             onClick = onOpenStudyReportsTab,
                             modifier = Modifier.testTag("overview_view_logs_button")
                         ) {
-                            Text("View Logs")
+                            Text("Review Logs")
                         }
                     }
                 }
@@ -443,8 +485,11 @@ private fun OverviewTab(
             }
         }
 
-        // Student & Subject Card (PDF Page 1 & 2)
+        // Student & Subject Card
         item {
+            val guideTypeText = if (record.guideType.isNotBlank()) {
+                " • ${GuideType.fromRaw(record.guideType).label}"
+            } else ""
             Card(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
@@ -456,10 +501,12 @@ private fun OverviewTab(
                     DetailLine("CIC / Clg Ad No", "${record.cicAdNo} / ${record.clgAdNo.ifBlank { "-" }}")
                     DetailLine("Class / Dept", record.classDepartment)
                     DetailLine("Year & Semester", "${record.academicYear} • ${record.semester}")
+                    DetailLine("Off-Course Subject", record.subjectTitle)
+                    DetailLine("Exempted Subject", record.exemptedSubject.ifBlank { "Not specified" })
                     DetailLine("Stream", record.stream)
                     DetailLine("College", record.collegeAfflName)
                     DetailLine("Proposal App No", "${record.proposalAppNo.ifBlank { "-" }} (Credit: ${record.credit})")
-                    DetailLine("Guide (Mentor)", "${record.guideName} (${record.guidePhone.ifBlank { "-" }})")
+                    DetailLine("Guide (Mentor)", "${record.guideName}$guideTypeText (${record.guidePhone.ifBlank { "-" }})")
                     if (record.referenceBooks.isNotBlank()) {
                         DetailLine("References", record.referenceBooks)
                     }
@@ -521,7 +568,6 @@ private fun OverviewTab(
                         Text("Principal Remarks: ${record.principalRemarks}", style = MaterialTheme.typography.bodySmall)
                     }
 
-                    // Role-based actions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -546,7 +592,7 @@ private fun OverviewTab(
                                 Text("Principal Sign")
                             }
                         }
-                        if (activeRole == UserRole.STUDENT && record.studentUid == currentUserId && record.recordStatus == RecordStatus.ACTIVE.name) {
+                        if (activeRole == UserRole.STUDENT && record.recordStatus == RecordStatus.ACTIVE.name) {
                             FilledTonalButton(
                                 onClick = onSubmitForReview,
                                 modifier = Modifier.weight(1f).testTag("submit_record_review_button")
@@ -573,7 +619,7 @@ private fun StudyReportTab(
     record: OffCourseRecord,
     reportsState: UiState<List<WeeklyStudyReport>>,
     reports: List<WeeklyStudyReport>,
-    nextPendingWeek: Int,
+    lockState: WeeklyLockState,
     activeRole: UserRole,
     currentUserId: String,
     onEditWeek: (Int) -> Unit,
@@ -592,12 +638,7 @@ private fun StudyReportTab(
         return
     }
 
-    val byWeek = reports.associateBy { it.weekNumber.toInt() }
     val loggedReports = reports.sortedBy { it.weekNumber }
-    val unloggedWeeks = (1..18).filter { it !in byWeek.keys }
-    val otherEmptyWeeks = unloggedWeeks.filter { it != nextPendingWeek }
-    var showUpcomingWeeks by remember { mutableStateOf(false) }
-
     val canEditAsStudent = (record.studentUid == currentUserId || activeRole == UserRole.STUDENT) &&
         record.recordStatus != RecordStatus.ARCHIVED.name
     val canVerify = activeRole == UserRole.GUIDE || activeRole == UserRole.PRINCIPAL || activeRole == UserRole.ADMIN
@@ -606,39 +647,113 @@ private fun StudyReportTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Student Quick CTA to log the next unfilled week
+        // Student Sequential Week Gate Banner
         if (canEditAsStudent) {
             item {
-                Card(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = if (nextPendingWeek in byWeek) "All 18 Weeks Logged" else "Next to Fill: Week $nextPendingWeek",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = "Dates & scheduled periods are pre-filled automatically. Just add what was done in each period.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                        Button(
-                            onClick = { onEditWeek(nextPendingWeek) },
-                            modifier = Modifier.testTag("log_next_pending_week_button")
+                val blocking = lockState.blockingUnverifiedReport
+                when {
+                    blocking != null -> {
+                        Card(
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            modifier = Modifier.fillMaxWidth().testTag("study_tab_locked_banner")
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Week $nextPendingWeek")
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                    Text(
+                                        text = "Week ${blocking.weekNumber + 1} Locked — Guide Approval Needed",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                Text(
+                                    text = "Approach your Guide (${record.guideName}) to approve Week ${blocking.weekNumber} before adding Week ${blocking.weekNumber + 1}.\nഗൈഡിൻ്റെ അപ്രൂവൽ ലഭിക്കാതെ അടുത്ത ആഴ്ചയിലെ റെക്കോർഡ് ചേർക്കാൻ കഴിയില്ല — അപ്രൂവലിനായി ഗൈഡിനെ സമീപിക്കുക.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        onClick = { onEditWeek(blocking.weekNumber.toInt()) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Edit Week ${blocking.weekNumber}")
+                                    }
+                                    Button(
+                                        onClick = {},
+                                        enabled = false,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Week ${blocking.weekNumber + 1}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    lockState.nextUnlockedWeek != null -> {
+                        val nextWk = lockState.nextUnlockedWeek
+                        Card(
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "Next Unlocked: Week $nextWk",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "${record.periodsPerWeek} periods/week pre-filled. Log authentic work for each period.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                                Button(
+                                    onClick = { onEditWeek(nextWk) },
+                                    modifier = Modifier.testTag("log_next_pending_week_button")
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Week $nextWk")
+                                }
+                            }
+                        }
+                    }
+                    lockState.isAllWeeksCompletedAndVerified -> {
+                        Surface(
+                            color = VerifiedGreen.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = VerifiedGreen)
+                                Text(
+                                    text = "All 18 weekly reports completed and verified by Guide!",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = VerifiedGreen,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -662,10 +777,11 @@ private fun StudyReportTab(
             }
         }
 
-        // Logged Weekly Study Reports (with full Per-Period Activity Notes)
+        // Logged Weekly Study Reports
         items(loggedReports, key = { it.weekNumber }) { rep ->
             val weekNum = rep.weekNumber.toInt()
             val (bg, fg) = weekStatusColors(rep.verificationStatus)
+            val isVerified = rep.verificationStatus == WeekVerificationStatus.VERIFIED.name
             Card(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -727,24 +843,28 @@ private fun StudyReportTab(
                         Text(
                             text = "Authorized by: ${rep.authorizedSignature}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = VerifiedGreen,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                     if (rep.mentorFeedback.isNotBlank()) {
                         Text(
-                            text = "Mentor Feedback: ${rep.mentorFeedback}",
+                            text = "Guide Feedback: ${rep.mentorFeedback}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary
                         )
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (canEditAsStudent) {
+                        if (canEditAsStudent && !isVerified) {
                             FilledTonalButton(
                                 onClick = { onEditWeek(weekNum) },
                                 modifier = Modifier.testTag("log_week_${weekNum}_button")
                             ) {
-                                Text("Edit Week $weekNum")
+                                Text(
+                                    if (rep.verificationStatus == WeekVerificationStatus.NEEDS_REVISION.name) "Revise Week $weekNum"
+                                    else "Edit Week $weekNum"
+                                )
                             }
                         }
                         if (canVerify) {
@@ -754,59 +874,7 @@ private fun StudyReportTab(
                             ) {
                                 Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Verify & Sign")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Collapsible upcoming empty weeks for students so they can jump to any week without clutter
-        if (canEditAsStudent && otherEmptyWeeks.isNotEmpty()) {
-            item {
-                OutlinedButton(
-                    onClick = { showUpcomingWeeks = !showUpcomingWeeks },
-                    modifier = Modifier.fillMaxWidth().testTag("toggle_upcoming_weeks_button")
-                ) {
-                    Text(
-                        if (showUpcomingWeeks) "Hide Upcoming Empty Weeks (${otherEmptyWeeks.size})"
-                        else "Show Other Empty Weeks (${otherEmptyWeeks.size})"
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        imageVector = if (showUpcomingWeeks) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = null
-                    )
-                }
-            }
-            if (showUpcomingWeeks) {
-                items(otherEmptyWeeks, key = { "empty_$it" }) { weekNum ->
-                    AnimatedVisibility(visible = true) {
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text("Week $weekNum", style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "Not logged yet",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                FilledTonalButton(
-                                    onClick = { onEditWeek(weekNum) },
-                                    modifier = Modifier.testTag("log_week_${weekNum}_button")
-                                ) {
-                                    Text("Log Week $weekNum")
-                                }
+                                Text(if (isVerified) "Update Approval" else "Approve Week $weekNum")
                             }
                         }
                     }

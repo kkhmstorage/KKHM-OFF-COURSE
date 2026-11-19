@@ -148,6 +148,7 @@ fun OffCourseRecordFormScreen(
     }
 
     var subjectTitle by remember(existingRecord?.id) { mutableStateOf(existingRecord?.subjectTitle.orEmpty()) }
+    var exemptedSubject by remember(existingRecord?.id) { mutableStateOf(existingRecord?.exemptedSubject.orEmpty()) }
     var proposalAppNo by remember(existingRecord?.id) { mutableStateOf(existingRecord?.proposalAppNo.orEmpty()) }
     var creditText by remember(existingRecord?.id) { mutableStateOf((existingRecord?.credit ?: 4L).toString()) }
 
@@ -163,6 +164,13 @@ fun OffCourseRecordFormScreen(
             existingRecord?.guideName?.ifBlank { null }
                 ?: assignedGuideAccount?.displayName?.ifBlank { null }
                 ?: latestStudentRecord?.guideName.orEmpty()
+        )
+    }
+    var guideType by remember(existingRecord?.id, assignedGuideAccount?.username, latestStudentRecord?.id) {
+        mutableStateOf(
+            existingRecord?.guideType?.ifBlank { null }
+                ?: assignedGuideAccount?.guideType?.ifBlank { null }
+                ?: latestStudentRecord?.guideType.orEmpty()
         )
     }
     var guideEmail by remember(existingRecord?.id, latestStudentRecord?.id) {
@@ -210,6 +218,9 @@ fun OffCourseRecordFormScreen(
                 }
                 if (guideWhatsapp.isBlank() && lookedUp.phone.isNotBlank()) {
                     guideWhatsapp = lookedUp.phone
+                }
+                if (lookedUp.guideType.isNotBlank()) {
+                    guideType = lookedUp.guideType
                 }
             }
         }
@@ -422,6 +433,15 @@ fun OffCourseRecordFormScreen(
                 modifier = Modifier.fillMaxWidth().testTag("form_subject_title")
             )
 
+            OutlinedTextField(
+                value = exemptedSubject,
+                onValueChange = { exemptedSubject = it },
+                label = { Text("Exempted / Dropped Regular Subject *") },
+                placeholder = { Text("Which regular subject was dropped for this Off-Course?") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("form_exempted_subject")
+            )
+
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ExposedDropdownMenuBox(
                     expanded = yearDropdownExpanded,
@@ -577,9 +597,11 @@ fun OffCourseRecordFormScreen(
                                 stream = selectedStream.label,
                                 collegeAfflName = collegeAfflName.trim(),
                                 subjectTitle = subjectTitle.trim(),
+                                exemptedSubject = exemptedSubject.trim(),
                                 proposalAppNo = proposalAppNo.trim(),
                                 credit = (creditText.toLongOrNull() ?: 4L).coerceIn(0L, 20L),
                                 guideName = guideName.trim(),
+                                guideType = guideType.trim(),
                                 guidePhone = guidePhone.trim(),
                                 guideWhatsapp = guideWhatsapp.trim(),
                                 referenceBooks = referenceBooks.trim(),

@@ -6,6 +6,7 @@ import com.example.data.model.AccountStatus
 import com.example.data.model.CicStream
 import com.example.data.model.CollegeAccount
 import com.example.data.model.DarkModePreference
+import com.example.data.model.GuideType
 import com.example.data.model.UserRole
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -89,10 +90,10 @@ class CollegeAccountRepository(
         )
     }
 
-    fun observeAllAccounts(): Flow<List<CollegeAccount>> = flow {
+    fun observeAllAccounts(canListAll: Boolean = false): Flow<List<CollegeAccount>> = flow {
         val uid = requireUserId()
         val path = "college_accounts"
-        val query = if (isBootstrappedAdminDevice()) {
+        val query = if (isBootstrappedAdminDevice() || canListAll) {
             db.collection(path)
         } else {
             db.collection(path).whereEqualTo("createdByUid", uid)
@@ -246,7 +247,10 @@ class CollegeAccountRepository(
         classDepartment: String,
         stream: String,
         assignedGuideUsername: String,
-        phone: String
+        phone: String,
+        email: String = "",
+        guideType: String = "",
+        institution: String = ""
     ): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not authenticated"))
         val username = PasswordHasher.normalizeUsername(rawUsername)
@@ -260,6 +264,13 @@ class CollegeAccountRepository(
 
             val cleanStream = if (stream.isBlank()) "" else CicStream.fromLabel(stream).label
             val cleanGuideUser = PasswordHasher.normalizeUsername(assignedGuideUsername).take(40)
+            val cleanEmail = email.trim().lowercase().take(120)
+            val cleanGuideType = if (role == UserRole.GUIDE) {
+                GuideType.fromRaw(guideType.ifBlank { GuideType.COLLEGE_FACULTY.name }).name
+            } else {
+                ""
+            }
+            val cleanInstitution = institution.trim().take(160)
             val docRef = db.collection("college_accounts").document(username)
             val existing = docRef.get().await()
 
@@ -273,6 +284,9 @@ class CollegeAccountRepository(
                     "stream" to cleanStream,
                     "assignedGuideUsername" to cleanGuideUser,
                     "phone" to phone.trim().take(30),
+                    "email" to cleanEmail,
+                    "guideType" to cleanGuideType,
+                    "institution" to cleanInstitution,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 if (!rawPasswordOrNull.isNullOrBlank()) {
@@ -299,6 +313,9 @@ class CollegeAccountRepository(
                     "stream" to cleanStream,
                     "assignedGuideUsername" to cleanGuideUser,
                     "phone" to phone.trim().take(30),
+                    "email" to cleanEmail,
+                    "guideType" to cleanGuideType,
+                    "institution" to cleanInstitution,
                     "boundUid" to "",
                     "createdByUid" to uid,
                     "createdAt" to FieldValue.serverTimestamp(),
@@ -380,7 +397,8 @@ class CollegeAccountRepository(
         return try {
             requireUserId()
             val seeds = listOf(
-                SeededCredential("guide1", "guide123", UserRole.GUIDE, "Usthad Abdul Rahman (Guide)"),
+                SeededCredential("guide1", "guide123", UserRole.GUIDE, "Usthad Abdul Rahman (College Guide)"),
+                SeededCredential("extguide1", "guide123", UserRole.GUIDE, "Dr. Salim Nadwi (External Guide)"),
                 SeededCredential("principal1", "prin123", UserRole.PRINCIPAL, "Dr. Muhammed Ali (Principal)"),
                 SeededCredential("student1", "kkhm123", UserRole.STUDENT, "Fathima Zahra"),
                 SeededCredential("student2", "kkhm123", UserRole.STUDENT, "Muhammed Anas")
@@ -395,10 +413,13 @@ class CollegeAccountRepository(
                         rawPasswordOrNull = seed.rawPassword,
                         accountStatus = AccountStatus.ACTIVE,
                         cicAdNo = if (seed.role == UserRole.STUDENT) "CIC-2026-${seed.username.takeLast(2)}" else "",
-                        classDepartment = if (seed.role == UserRole.STUDENT) "Final Wafy / Degree" else "Faculty",
+                        classDepartment = if (seed.role == UserRole.STUDENT) "Final Wafy / Degree" else if (seed.username == "extguide1") "External Resource Person" else "Faculty",
                         stream = if (seed.role == UserRole.STUDENT) CicStream.WAFY.label else "",
                         assignedGuideUsername = if (seed.role == UserRole.STUDENT) "guide1" else "",
-                        phone = ""
+                        phone = "",
+                        email = "",
+                        guideType = if (seed.username == "extguide1") GuideType.EXTERNAL.name else if (seed.role == UserRole.GUIDE) GuideType.COLLEGE_FACULTY.name else "",
+                        institution = if (seed.username == "extguide1") "External Mentor Institution" else "KKHM Islamic & Arts College"
                     )
                     if (res.isSuccess) created.add(seed)
                 }
@@ -441,7 +462,10 @@ class CollegeAccountRepository(
                 classDepartment = row.classDepartment,
                 stream = row.stream,
                 assignedGuideUsername = row.assignedGuideUsername,
-                phone = row.phone
+                phone = row.phone,
+                email = row.email,
+                guideType = row.guideType,
+                institution = row.institution
             )
             if (res.isSuccess) {
                 if (alreadyExists) updated++ else created++

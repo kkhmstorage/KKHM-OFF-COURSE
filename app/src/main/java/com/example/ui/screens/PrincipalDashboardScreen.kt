@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WarningAmber
@@ -44,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AcademicTerm
+import com.example.data.model.GuideType
 import com.example.data.model.OffCourseRecord
 import com.example.data.model.SignatureStatus
 import com.example.data.model.UiState
@@ -52,6 +54,8 @@ import com.example.ui.components.StatusBadge
 import com.example.ui.components.StreamBreakdownSection
 import com.example.ui.components.UtilizationGaugeRing
 import com.example.ui.components.signatureStatusColors
+import com.example.ui.theme.PendingAmber
+import com.example.ui.theme.VerifiedGreen
 
 @Composable
 fun PrincipalDashboardScreen(
@@ -64,6 +68,7 @@ fun PrincipalDashboardScreen(
     onSelectSemester: (String) -> Unit,
     onShowAllTerms: () -> Unit = {},
     onOpenRecord: (String) -> Unit,
+    onOpenStudentHistory: (String) -> Unit,
     onOpenAcademicSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -79,6 +84,10 @@ fun PrincipalDashboardScreen(
         }
         is UiState.Success -> {
             val all = recordsState.data
+            val semestersByStudent = remember(all) {
+                all.groupBy { resolveStudentHistoryKey(it) }
+                    .mapValues { (_, list) -> list.map { "${it.academicYear} (${it.semester})" }.distinct().size }
+            }
             val filtered = all.filter { rec ->
                 (selectedYear == "ALL" || rec.academicYear == selectedYear) &&
                     (selectedSemester == "ALL" || rec.semester == selectedSemester) &&
@@ -86,6 +95,7 @@ fun PrincipalDashboardScreen(
                         rec.studentName.contains(searchQuery, ignoreCase = true) ||
                         rec.cicAdNo.contains(searchQuery, ignoreCase = true) ||
                         rec.subjectTitle.contains(searchQuery, ignoreCase = true) ||
+                        rec.exemptedSubject.contains(searchQuery, ignoreCase = true) ||
                         rec.guideName.contains(searchQuery, ignoreCase = true))
             }
 
@@ -133,7 +143,7 @@ fun PrincipalDashboardScreen(
                                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("KKHM Principal Overview", style = MaterialTheme.typography.titleLarge)
                                     Text(
-                                        text = "KKHM Islamic & Arts College • CIC Off-Course Monitoring",
+                                        text = "Off-Course Subjects, Exempted Subjects & Multi-Semester History",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -160,7 +170,7 @@ fun PrincipalDashboardScreen(
                                         val csv = buildExecutiveCsv(filtered)
                                         val intent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
-                                            putExtra(Intent.EXTRA_SUBJECT, "KKHM Islamic & Arts College Off-Course Summary ($selectedYear)")
+                                            putExtra(Intent.EXTRA_SUBJECT, "KKHM Off-Course Summary ($selectedYear $selectedSemester)")
                                             putExtra(Intent.EXTRA_TEXT, csv)
                                         }
                                         context.startActivity(Intent.createChooser(intent, "Share Executive Report"))
@@ -169,7 +179,7 @@ fun PrincipalDashboardScreen(
                                 ) {
                                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Share Report")
+                                    Text("Share CSV")
                                 }
                                 OutlinedButton(
                                     onClick = onOpenAcademicSettings,
@@ -251,7 +261,7 @@ fun PrincipalDashboardScreen(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        label = { Text("Filter by student, guide, CIC No, or subject") },
+                        label = { Text("Filter by student, exempted subject, guide, CIC No, or subject") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("principal_search_input")
                     )
@@ -300,6 +310,10 @@ fun PrincipalDashboardScreen(
                     items(filtered, key = { it.id }) { record ->
                         val (pBg, pFg) = signatureStatusColors(record.principalSignatureStatus)
                         val (gBg, gFg) = signatureStatusColors(record.guideSignatureStatus)
+                        val studentKey = resolveStudentHistoryKey(record)
+                        val totalSemesters = semestersByStudent[studentKey] ?: 1
+                        val guideTypeShort = if (record.guideType == GuideType.EXTERNAL.name) "External" else "College"
+
                         ElevatedCard(
                             onClick = { onOpenRecord(record.id) },
                             shape = RoundedCornerShape(18.dp),
@@ -307,14 +321,14 @@ fun PrincipalDashboardScreen(
                         ) {
                             Column(
                                 modifier = Modifier.padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(record.studentName, style = MaterialTheme.typography.titleMedium)
+                                        Text(record.studentName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                         Text(
                                             "${record.cicAdNo} • ${record.stream} • ${record.academicYear} (${record.semester})",
                                             style = MaterialTheme.typography.bodySmall,
@@ -328,21 +342,65 @@ fun PrincipalDashboardScreen(
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
+
                                 Text(
-                                    text = "${record.subjectTitle} • Guide: ${record.guideName}",
-                                    style = MaterialTheme.typography.bodyMedium
+                                    text = "Off-Course: ${record.subjectTitle}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Surface(
+                                    color = PendingAmber.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "Exempted Subject: ${record.exemptedSubject.ifBlank { "Not specified" }}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Guide: ${record.guideName} ($guideTypeShort) • Logged: ${record.completedWeeksCount}/18 Wks",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    StatusBadge(
+                                        text = if (totalSemesters > 1) "Past Semesters: $totalSemesters Terms" else "1 Semester Taken",
+                                        containerColor = if (totalSemesters > 1) VerifiedGreen.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        contentColor = if (totalSemesters > 1) VerifiedGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     StatusBadge(
                                         "Guide: ${SignatureStatus.fromRaw(record.guideSignatureStatus).label}",
                                         gBg,
                                         gFg
                                     )
                                     StatusBadge(
-                                        "Principal: ${SignatureStatus.fromRaw(record.principalSignatureStatus).label}",
+                                        "Prin: ${SignatureStatus.fromRaw(record.principalSignatureStatus).label}",
                                         pBg,
                                         pFg
                                     )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { onOpenStudentHistory(studentKey) },
+                                        modifier = Modifier.weight(1f).testTag("principal_history_${record.id}")
+                                    ) {
+                                        Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("All Semesters ($totalSemesters)")
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { onOpenRecord(record.id) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Open Record Book")
+                                    }
                                 }
                             }
                         }
@@ -370,7 +428,7 @@ private fun ExecutiveStatTile(label: String, value: String, modifier: Modifier =
 }
 
 private fun buildExecutiveCsv(records: List<OffCourseRecord>): String {
-    val header = "Student,CIC_Ad_No,Stream,Year,Semester,Subject,Guide,Periods_Utilized,Periods_Allocated,Utilization_Pct,Weeks_Verified,Guide_Status,Principal_Status"
+    val header = "Student,CIC_Ad_No,Stream,Year,Semester,OffCourse_Subject,Exempted_Subject,Guide,Guide_Type,Periods_Utilized,Periods_Allocated,Utilization_Pct,Weeks_Verified,Guide_Status,Principal_Status"
     val rows = records.joinToString("\n") { r ->
         listOf(
             r.studentName,
@@ -379,7 +437,9 @@ private fun buildExecutiveCsv(records: List<OffCourseRecord>): String {
             r.academicYear,
             r.semester,
             r.subjectTitle,
+            r.exemptedSubject,
             r.guideName,
+            r.guideType,
             r.totalUtilizedPeriods,
             r.totalAllocatedPeriods,
             "${r.utilizationPercent}%",

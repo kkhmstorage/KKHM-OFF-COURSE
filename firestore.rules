@@ -36,13 +36,41 @@ service cloud.firestore {
     }
 
     function callerPortalUsername() {
-      return isSignedIn() &&
-             exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('portalUsername', '')
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return isSignedIn() && exists(userPath)
+        ? get(userPath).data.get('portalUsername', '')
         : '';
     }
 
+    function isPortalRoleIn(roles) {
+      let uname = callerPortalUsername();
+      let accPath = /databases/$(database)/documents/college_accounts/$(uname);
+      return isSignedIn() &&
+             uname != '' &&
+             exists(accPath) &&
+             isPortalAccountActiveWithRoles(get(accPath).data, roles);
+    }
+
+    function isPortalAccountActiveWithRoles(acc, roles) {
+      return acc.accountStatus == 'ACTIVE' &&
+             acc.role in roles &&
+             (acc.boundUid == request.auth.uid || isBootstrappedAdmin());
+    }
+
+    function isPortalRole(roleName) {
+      return isPortalRoleIn([roleName]);
+    }
+
+    function isAnyAdmin() {
+      return isBootstrappedAdmin() || isPortalRoleIn(['ADMIN']);
+    }
+
+    function isAnyPrincipal() {
+      return isBootstrappedAdmin() || isPortalRoleIn(['PRINCIPAL', 'ADMIN']);
+    }
+
     function isAssignedGuide(data) {
+      let uname = callerPortalUsername();
       return (hasVerifiedEmail() &&
               data.guideEmail is string &&
               data.guideEmail.size() > 0 &&
@@ -51,8 +79,8 @@ service cloud.firestore {
               'guideUsername' in data &&
               data.guideUsername is string &&
               data.guideUsername.size() > 0 &&
-              callerPortalUsername() != '' &&
-              data.guideUsername == callerPortalUsername());
+              uname != '' &&
+              data.guideUsername == uname);
     }
 
     function isAssignedStudentOwner(data) {
@@ -61,28 +89,32 @@ service cloud.firestore {
         ('studentUsername' in data &&
          data.studentUsername is string &&
          data.studentUsername.size() > 0 &&
-         callerPortalUsername() != '' &&
          data.studentUsername == callerPortalUsername())
       );
     }
 
     function isAssignedPrincipal(data) {
-      return hasVerifiedEmail() &&
-             data.principalEmail is string &&
-             data.principalEmail.size() > 0 &&
-             data.principalEmail == request.auth.token.email;
+      return (hasVerifiedEmail() &&
+              data.principalEmail is string &&
+              data.principalEmail.size() > 0 &&
+              data.principalEmail == request.auth.token.email) ||
+             isAnyPrincipal();
     }
 
     function isValidPortalBinding(username) {
+      let accPath = /databases/$(database)/documents/college_accounts/$(username);
       return username == '' ||
              (username is string &&
               username.size() >= 3 &&
               username.size() <= 40 &&
               username.matches('^[a-z0-9_\\-]+$') &&
-              exists(/databases/$(database)/documents/college_accounts/$(username)) &&
-              get(/databases/$(database)/documents/college_accounts/$(username)).data.accountStatus == 'ACTIVE' &&
-              (get(/databases/$(database)/documents/college_accounts/$(username)).data.boundUid == request.auth.uid ||
-               isBootstrappedAdmin()));
+              exists(accPath) &&
+              isValidBoundAccount(get(accPath).data));
+    }
+
+    function isValidBoundAccount(acc) {
+      return acc.accountStatus == 'ACTIVE' &&
+             (acc.boundUid == request.auth.uid || isBootstrappedAdmin());
     }
 
     // --- VALIDATION BLUEPRINTS ---
@@ -117,6 +149,9 @@ service cloud.firestore {
              (!('stream' in data) || (data.stream in ['', 'Wafy', 'Wafy Arts', 'Wafiyya', 'Wafiyya Day', 'Wafiyya Arts', 'Wafiyya Distance'])) &&
              (!('assignedGuideUsername' in data) || (data.assignedGuideUsername is string && data.assignedGuideUsername.size() <= 40)) &&
              (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('guideType' in data) || (data.guideType in ['', 'COLLEGE_FACULTY', 'EXTERNAL'])) &&
+             (!('institution' in data) || (data.institution is string && data.institution.size() <= 160)) &&
              data.boundUid is string && data.boundUid.size() <= 128 &&
              data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
@@ -152,9 +187,11 @@ service cloud.firestore {
              data.stream in ['Wafy', 'Wafy Arts', 'Wafiyya', 'Wafiyya Day', 'Wafiyya Arts', 'Wafiyya Distance'] &&
              data.collegeAfflName is string && data.collegeAfflName.size() >= 1 && data.collegeAfflName.size() <= 160 &&
              data.subjectTitle is string && data.subjectTitle.size() >= 1 && data.subjectTitle.size() <= 160 &&
+             (!('exemptedSubject' in data) || (data.exemptedSubject is string && data.exemptedSubject.size() <= 160)) &&
              (!('proposalAppNo' in data) || (data.proposalAppNo is string && data.proposalAppNo.size() <= 60)) &&
              data.credit is int && data.credit >= 0 && data.credit <= 20 &&
              data.guideName is string && data.guideName.size() >= 1 && data.guideName.size() <= 100 &&
+             (!('guideType' in data) || (data.guideType is string && data.guideType.size() <= 40)) &&
              (!('guidePhone' in data) || (data.guidePhone is string && data.guidePhone.size() <= 30)) &&
              (!('guideWhatsapp' in data) || (data.guideWhatsapp is string && data.guideWhatsapp.size() <= 30)) &&
              (!('referenceBooks' in data) || (data.referenceBooks is string && data.referenceBooks.size() <= 600)) &&
@@ -240,9 +277,10 @@ service cloud.firestore {
       // Single-document lookup for credential verification & guide profile auto-fill
       allow get: if isSignedIn() && isValidId(username);
 
-      // List access strictly scoped to Admin or user's own created/bound accounts
+      // List access strictly scoped to Admin, Principal, or user's own created/bound accounts
       allow list: if isSignedIn() && (
-        isBootstrappedAdmin() ||
+        isAnyAdmin() ||
+        isAnyPrincipal() ||
         resource.data.boundUid == request.auth.uid ||
         resource.data.createdByUid == request.auth.uid
       );
@@ -258,12 +296,12 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'username', 'displayName', 'role', 'passwordSalt', 'passwordHash',
                          'accountStatus', 'cicAdNo', 'classDepartment', 'stream',
-                         'assignedGuideUsername', 'phone', 'boundUid', 'createdByUid',
-                         'createdAt', 'updatedAt'
+                         'assignedGuideUsername', 'phone', 'email', 'guideType', 'institution',
+                         'boundUid', 'createdByUid', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidCollegeAccount(incoming()) &&
                        (
-                         isBootstrappedAdmin() ||
+                         isAnyAdmin() ||
                          (incoming().role == 'ADMIN' && username == 'admin' &&
                           !exists(/databases/$(database)/documents/college_accounts/admin))
                        );
@@ -275,13 +313,14 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidCollegeAccount(incoming()) &&
                        (
-                         // Tier 1: Bootstrapped Admin or original Admin creator
+                         // Tier 1: Bootstrapped Admin, Active Portal Admin, or original Admin creator
                          (
-                           (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid) &&
+                           (isAnyAdmin() || existing().createdByUid == request.auth.uid) &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
                              'displayName', 'role', 'passwordSalt', 'passwordHash',
                              'accountStatus', 'cicAdNo', 'classDepartment', 'stream',
-                             'assignedGuideUsername', 'phone', 'boundUid', 'updatedAt'
+                             'assignedGuideUsername', 'phone', 'email', 'guideType', 'institution',
+                             'boundUid', 'updatedAt'
                            ])
                          ) ||
                          // Tier 2: Account owner binding their UID on first real user login
@@ -295,7 +334,7 @@ service cloud.firestore {
 
       allow delete: if isSignedIn() &&
                        isValidId(username) &&
-                       (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid);
+                       (isAnyAdmin() || existing().createdByUid == request.auth.uid);
     }
 
     // --- 3. ACADEMIC TERMS (YEARS & SEMESTERS) ---
@@ -356,19 +395,18 @@ service cloud.firestore {
       allow get: if isSignedIn() &&
                     isValidId(recordId) &&
                     (
-                      isBootstrappedAdmin() ||
                       isAssignedStudentOwner(existing()) ||
                       isAssignedGuide(existing()) ||
                       isAssignedPrincipal(existing())
                     );
 
       allow list: if isSignedIn() && (
-        isBootstrappedAdmin() ||
         resource.data.studentUid == request.auth.uid ||
         (hasVerifiedEmail() && (
           resource.data.guideEmail == request.auth.token.email ||
           resource.data.principalEmail == request.auth.token.email
         )) ||
+        isAnyPrincipal() ||
         (callerPortalUsername() != '' && (
           resource.data.guideUsername == callerPortalUsername() ||
           resource.data.studentUsername == callerPortalUsername()
@@ -377,7 +415,7 @@ service cloud.firestore {
 
       allow create: if isSignedIn() &&
                        isValidId(recordId) &&
-                       incoming().studentUid == request.auth.uid &&
+                       (incoming().studentUid == request.auth.uid || isAnyAdmin()) &&
                        incoming().guideSignatureStatus == 'PENDING' &&
                        incoming().principalSignatureStatus == 'PENDING' &&
                        incoming().keys().hasAll([
@@ -393,9 +431,9 @@ service cloud.firestore {
                          'studentUid', 'studentUsername', 'studentEmail',
                          'guideUsername', 'guideEmail', 'principalEmail',
                          'studentName', 'cicAdNo', 'clgAdNo', 'classDepartment', 'academicYear',
-                         'semester', 'stream', 'collegeAfflName', 'subjectTitle', 'proposalAppNo',
-                         'credit', 'guideName', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
-                         'timetableSlots', 'periodsPerWeek',
+                         'semester', 'stream', 'collegeAfflName', 'subjectTitle', 'exemptedSubject',
+                         'proposalAppNo', 'credit', 'guideName', 'guideType', 'guidePhone', 'guideWhatsapp',
+                         'referenceBooks', 'timetableSlots', 'periodsPerWeek',
                          'guideSignatureStatus', 'guideSignatureName', 'guideRemarks',
                          'principalSignatureStatus', 'principalSignatureName', 'principalRemarks',
                          'recordStatus', 'completedWeeksCount', 'verifiedWeeksCount',
@@ -407,18 +445,18 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidId(recordId) &&
                        isValidOffCourseRecord(incoming()) &&
-                       incoming().studentUid == existing().studentUid &&
+                       (incoming().studentUid == existing().studentUid || isAnyAdmin()) &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         // Tier 0: Bootstrapped Admin Full Control
+                         // Tier 0: Bootstrapped or Portal Admin Full Control
                          (
-                           isBootstrappedAdmin() &&
+                           isAnyAdmin() &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
-                             'studentUsername', 'studentEmail', 'guideUsername', 'guideEmail',
+                             'studentUid', 'studentUsername', 'studentEmail', 'guideUsername', 'guideEmail',
                              'principalEmail', 'studentName', 'cicAdNo', 'clgAdNo',
                              'classDepartment', 'academicYear', 'semester', 'stream',
-                             'collegeAfflName', 'subjectTitle', 'proposalAppNo', 'credit',
-                             'guideName', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
+                             'collegeAfflName', 'subjectTitle', 'exemptedSubject', 'proposalAppNo', 'credit',
+                             'guideName', 'guideType', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
                              'timetableSlots', 'periodsPerWeek',
                              'guideSignatureStatus', 'guideSignatureName', 'guideRemarks',
                              'principalSignatureStatus', 'principalSignatureName', 'principalRemarks',
@@ -453,8 +491,8 @@ service cloud.firestore {
                              'studentUsername', 'studentEmail', 'guideUsername', 'guideEmail',
                              'principalEmail', 'studentName', 'cicAdNo', 'clgAdNo', 'classDepartment',
                              'academicYear', 'semester', 'stream', 'collegeAfflName',
-                             'subjectTitle', 'proposalAppNo', 'credit', 'guideName',
-                             'guidePhone', 'guideWhatsapp', 'referenceBooks',
+                             'subjectTitle', 'exemptedSubject', 'proposalAppNo', 'credit', 'guideName',
+                             'guideType', 'guidePhone', 'guideWhatsapp', 'referenceBooks',
                              'timetableSlots', 'periodsPerWeek', 'recordStatus',
                              'completedWeeksCount', 'verifiedWeeksCount',
                              'totalAllocatedPeriods', 'totalUtilizedPeriods',
@@ -465,7 +503,7 @@ service cloud.firestore {
 
       allow delete: if isSignedIn() &&
                        isValidId(recordId) &&
-                       (existing().studentUid == request.auth.uid || isBootstrappedAdmin());
+                       (existing().studentUid == request.auth.uid || isAnyAdmin());
 
       // --- 5. WEEKLY STUDY REPORTS (WEEKS 1-18+) ---
       match /weekly_reports/{weekId} {
@@ -473,19 +511,18 @@ service cloud.firestore {
                       isValidId(recordId) &&
                       isValidId(weekId) &&
                       (
-                        isBootstrappedAdmin() ||
                         isAssignedStudentOwner(existing()) ||
                         isAssignedGuide(existing()) ||
                         isAssignedPrincipal(existing())
                       );
 
         allow list: if isSignedIn() && (
-          isBootstrappedAdmin() ||
           resource.data.studentUid == request.auth.uid ||
           (hasVerifiedEmail() && (
             resource.data.guideEmail == request.auth.token.email ||
             resource.data.principalEmail == request.auth.token.email
           )) ||
+          isAnyPrincipal() ||
           (callerPortalUsername() != '' && (
             resource.data.guideUsername == callerPortalUsername() ||
             resource.data.studentUsername == callerPortalUsername()
@@ -520,46 +557,48 @@ service cloud.firestore {
         allow update: if isSignedIn() &&
                          isValidId(recordId) &&
                          isValidId(weekId) &&
-                         isValidWeeklyReport(incoming()) &&
                          incoming().recordId == existing().recordId &&
-                         incoming().studentUid == existing().studentUid &&
                          incoming().createdAt == existing().createdAt &&
+                         isValidWeeklyReport(incoming()) &&
                          (
-                           // Tier 0: Bootstrapped Admin Full Verification or Guide Reassignment Sync
+                           // Tier 2 first (cheapest for student edits on PENDING/NEEDS_REVISION; locked once VERIFIED)
                            (
-                             isBootstrappedAdmin() &&
-                             incoming().diff(existing()).affectedKeys().hasOnly([
-                               'guideUsername', 'guideEmail', 'principalEmail',
-                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
-                               'verifiedAt', 'updatedAt'
-                             ])
-                           ) ||
-                           // Tier 1: Assigned Guide or Assigned Principal Verification
-                           (
-                             (isAssignedGuide(existing()) || isAssignedPrincipal(existing())) &&
-                             incoming().diff(existing()).affectedKeys().hasOnly([
-                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
-                               'verifiedAt', 'updatedAt'
-                             ])
-                           ) ||
-                           // Tier 2: Student Owner Edits Report & Period Utilization
-                           (
-                             isAssignedStudentOwner(existing()) &&
+                             existing().verificationStatus != 'VERIFIED' &&
                              incoming().verificationStatus in ['PENDING', 'NEEDS_REVISION'] &&
                              incoming().diff(existing()).affectedKeys().hasOnly([
-                               'studentUsername', 'guideUsername', 'guideEmail', 'principalEmail',
+                               'studentUid', 'studentUsername', 'guideUsername', 'guideEmail', 'principalEmail',
                                'weekNumber', 'dateFrom', 'dateTo',
                                'description', 'allocatedPeriods', 'utilizedPeriods',
                                'focusRating', 'utilizationNotes', 'periodLogs',
                                'verificationStatus', 'updatedAt'
-                             ])
+                             ]) &&
+                             isAssignedStudentOwner(existing())
+                           ) ||
+                           // Tier 1: Assigned Guide or Principal Verification
+                           (
+                             incoming().studentUid == existing().studentUid &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
+                               'verifiedAt', 'updatedAt'
+                             ]) &&
+                             (isAssignedGuide(existing()) || isAssignedPrincipal(existing()))
+                           ) ||
+                           // Tier 0: Bootstrapped or Portal Admin Full Verification or Guide Reassignment Sync
+                           (
+                             incoming().studentUid == existing().studentUid &&
+                             incoming().diff(existing()).affectedKeys().hasOnly([
+                               'guideUsername', 'guideEmail', 'principalEmail',
+                               'verificationStatus', 'authorizedSignature', 'mentorFeedback',
+                               'verifiedAt', 'updatedAt'
+                             ]) &&
+                             isAnyAdmin()
                            )
                          );
 
         allow delete: if isSignedIn() &&
                          isValidId(recordId) &&
                          isValidId(weekId) &&
-                         (existing().studentUid == request.auth.uid || isBootstrappedAdmin());
+                         (existing().studentUid == request.auth.uid || isAnyAdmin());
       }
     }
   }

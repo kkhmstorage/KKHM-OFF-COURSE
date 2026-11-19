@@ -9,8 +9,10 @@ import com.example.data.local.NotificationPreferences
 import com.example.data.local.PreferencesManager
 import com.example.data.model.AcademicTerm
 import com.example.data.model.AccountStatus
+import com.example.data.model.CicStream
 import com.example.data.model.CollegeAccount
 import com.example.data.model.DarkModePreference
+import com.example.data.model.GuideType
 import com.example.data.model.OffCourseRecord
 import com.example.data.model.RecordStatus
 import com.example.data.model.SignatureStatus
@@ -26,6 +28,7 @@ import com.example.data.remote.BulkImportRow
 import com.example.data.remote.BulkImportUiState
 import com.example.data.remote.CollegeAccountRepository
 import com.example.data.remote.OffCourseRepository
+import com.example.data.remote.PasswordHasher
 import com.example.data.remote.RemoteAppRelease
 import com.example.data.remote.SeededCredential
 import com.example.data.remote.UpdateCheckUiState
@@ -84,6 +87,12 @@ class MainViewModel(
 
     private val _isActionInProgress = MutableStateFlow(false)
     val isActionInProgress: StateFlow<Boolean> = _isActionInProgress.asStateFlow()
+
+    private val _consolidatedReports = MutableStateFlow<Map<String, List<WeeklyStudyReport>>>(emptyMap())
+    val consolidatedReports: StateFlow<Map<String, List<WeeklyStudyReport>>> = _consolidatedReports.asStateFlow()
+
+    private val _isLoadingConsolidated = MutableStateFlow(false)
+    val isLoadingConsolidated: StateFlow<Boolean> = _isLoadingConsolidated.asStateFlow()
 
     private val _remoteRelease = MutableStateFlow<RemoteAppRelease?>(null)
     private val _isCheckingUpdate = MutableStateFlow(false)
@@ -224,10 +233,10 @@ class MainViewModel(
 
     val collegeAccountsState: StateFlow<UiState<List<CollegeAccount>>> = activeRole
         .flatMapLatest { role ->
-            if (role != UserRole.ADMIN) {
+            if (role != UserRole.ADMIN && role != UserRole.PRINCIPAL) {
                 flowOf(UiState.Success(emptyList()))
             } else {
-                accountRepository.observeAllAccounts()
+                accountRepository.observeAllAccounts(canListAll = true)
                     .map<List<CollegeAccount>, UiState<List<CollegeAccount>>> { UiState.Success(it) }
                     .catch { error ->
                         val fsErr = error.rootFirestoreError()
@@ -255,6 +264,45 @@ class MainViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
+    // Automatically tracks weekly reports for the active student's primary record in selected Year/Semester
+    val studentActiveRecord: StateFlow<OffCourseRecord?> = combine(
+        studentRecordsState,
+        selectedAcademicYear,
+        selectedSemester
+    ) { recState, year, sem ->
+        val all = (recState as? UiState.Success)?.data.orEmpty()
+        val filtered = all.filter { rec ->
+            (year == "ALL" || rec.academicYear == year) &&
+                (sem == "ALL" || rec.semester == sem)
+        }
+        filtered.firstOrNull { it.recordStatus != RecordStatus.ARCHIVED.name } ?: filtered.firstOrNull()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
+    val studentInlineReportsState: StateFlow<UiState<List<WeeklyStudyReport>>> = combine(
+        studentActiveRecord,
+        activeAccountState
+    ) { record, accState ->
+        Pair(record, (accState as? UiState.Success)?.data)
+    }.flatMapLatest { (record, account) ->
+        if (record == null || account == null || UserRole.fromRaw(account.role) != UserRole.STUDENT) {
+            flowOf(UiState.Success(emptyList()))
+        } else {
+            repository.observeWeeklyReports(
+                recordId = record.id,
+                role = UserRole.STUDENT,
+                studentUid = record.studentUid,
+                guideUsername = record.guideUsername,
+                studentUsername = account.username
+            )
+                .map<List<WeeklyStudyReport>, UiState<List<WeeklyStudyReport>>> { UiState.Success(it) }
+                .catch { error ->
+                    val fsErr = error.rootFirestoreError()
+                    if (fsErr == null && error is CancellationException) throw error
+                    emit(UiState.Error((fsErr ?: error).message ?: "Failed to load weekly reports"))
+                }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Success(emptyList()))
+
     val guideRecordsState: StateFlow<UiState<List<OffCourseRecord>>> = activeAccountState
         .flatMapLatest { accState ->
             val account = (accState as? UiState.Success)?.data
@@ -277,7 +325,10 @@ class MainViewModel(
             if (role != UserRole.PRINCIPAL && role != UserRole.ADMIN) {
                 flowOf(UiState.Success(emptyList()))
             } else {
-                repository.observePrincipalRecords(currentUserEmail)
+                repository.observePrincipalRecords(
+                    userEmail = currentUserEmail,
+                    canListCampus = true
+                )
                     .map<List<OffCourseRecord>, UiState<List<OffCourseRecord>>> { UiState.Success(it) }
                     .catch { error ->
                         val fsErr = error.rootFirestoreError()
@@ -293,7 +344,7 @@ class MainViewModel(
             if (role != UserRole.ADMIN) {
                 flowOf(UiState.Success(emptyList()))
             } else {
-                repository.observeAllAdminRecords()
+                repository.observeAllAdminRecords(isPortalAdmin = true)
                     .map<List<OffCourseRecord>, UiState<List<OffCourseRecord>>> { UiState.Success(it) }
                     .catch { error ->
                         val fsErr = error.rootFirestoreError()
@@ -359,6 +410,24 @@ class MainViewModel(
             }
         }
         checkForAppUpdate(silent = true)
+    }
+
+    fun loadConsolidatedReportsFor(records: List<OffCourseRecord>) {
+        val ids = records.map { it.id }.filter { it.isNotBlank() }.distinct()
+        if (ids.isEmpty()) {
+            _consolidatedReports.value = emptyMap()
+            return
+        }
+        viewModelScope.launch {
+            _isLoadingConsolidated.value = true
+            val res = repository.fetchWeeklyReportsForRecords(ids)
+            res.onSuccess { fetched ->
+                _consolidatedReports.value = _consolidatedReports.value + fetched
+            }.onFailure { err ->
+                _snackbarEvents.emit(err.localizedMessage ?: "Failed to load weekly reports for summary")
+            }
+            _isLoadingConsolidated.value = false
+        }
     }
 
     fun checkForAppUpdate(silent: Boolean = false) {
@@ -460,6 +529,9 @@ class MainViewModel(
         stream: String,
         assignedGuideUsername: String,
         phone: String,
+        email: String = "",
+        guideType: String = "",
+        institution: String = "",
         onSaved: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -474,13 +546,105 @@ class MainViewModel(
                 classDepartment = classDepartment,
                 stream = stream,
                 assignedGuideUsername = assignedGuideUsername,
-                phone = phone
+                phone = phone,
+                email = email,
+                guideType = guideType,
+                institution = institution
             )
             if (res.isSuccess) {
                 _snackbarEvents.emit("Account '$username' saved (${role.title})")
                 onSaved()
             } else {
                 _snackbarEvents.emit(res.exceptionOrNull()?.localizedMessage ?: "Failed to save account")
+            }
+            _isActionInProgress.value = false
+        }
+    }
+
+    fun adminEnrollStudentOffCourse(
+        studentUsername: String,
+        studentName: String,
+        passwordOrNull: String?,
+        cicAdNo: String,
+        classDepartment: String,
+        stream: String,
+        phone: String,
+        academicYear: String,
+        semester: String,
+        subjectTitle: String,
+        exemptedSubject: String,
+        credit: Long,
+        guideAccount: CollegeAccount?,
+        guideUsernameFallback: String,
+        guideNameFallback: String,
+        timetableSlots: List<String>,
+        proposalAppNo: String,
+        referenceBooks: String,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _isActionInProgress.value = true
+            val cleanUser = PasswordHasher.normalizeUsername(studentUsername)
+            val cleanGuideUser = guideAccount?.username ?: PasswordHasher.normalizeUsername(guideUsernameFallback)
+            val resolvedGuideName = guideAccount?.displayName?.ifBlank { guideNameFallback } ?: guideNameFallback.trim()
+            val resolvedGuideType = guideAccount?.guideType?.ifBlank { GuideType.COLLEGE_FACULTY.name }
+                ?: GuideType.COLLEGE_FACULTY.name
+
+            // Ensure student portal account exists / is synced with assigned guide
+            val existingAcc = accountRepository.getAccountByUsername(cleanUser)
+            if (existingAcc == null || !passwordOrNull.isNullOrBlank() || existingAcc.assignedGuideUsername != cleanGuideUser) {
+                val accRes = accountRepository.saveCollegeAccount(
+                    rawUsername = cleanUser,
+                    displayName = studentName,
+                    role = UserRole.STUDENT,
+                    rawPasswordOrNull = passwordOrNull ?: if (existingAcc == null) "kkhm123" else null,
+                    accountStatus = AccountStatus.ACTIVE,
+                    cicAdNo = cicAdNo,
+                    classDepartment = classDepartment,
+                    stream = stream,
+                    assignedGuideUsername = cleanGuideUser,
+                    phone = phone
+                )
+                if (accRes.isFailure) {
+                    _snackbarEvents.emit(accRes.exceptionOrNull()?.localizedMessage ?: "Failed to save student account")
+                    _isActionInProgress.value = false
+                    return@launch
+                }
+            }
+
+            val finalSlots = timetableSlots.ifEmpty { listOf("Monday:2", "Wednesday:5") }
+            val record = OffCourseRecord(
+                studentUid = existingAcc?.boundUid.orEmpty(),
+                studentUsername = cleanUser,
+                studentEmail = existingAcc?.email.orEmpty(),
+                guideUsername = cleanGuideUser,
+                guideEmail = guideAccount?.email.orEmpty(),
+                principalEmail = "kkhmstorage@gmail.com",
+                studentName = studentName.trim(),
+                cicAdNo = cicAdNo.trim().ifBlank { cleanUser.uppercase() },
+                classDepartment = classDepartment.trim().ifBlank { "KKHM Scholar" },
+                academicYear = academicYear.trim(),
+                semester = semester.trim(),
+                stream = CicStream.fromLabel(stream).label,
+                collegeAfflName = "KKHM Islamic & Arts College (Affiliated to CIC)",
+                subjectTitle = subjectTitle.trim(),
+                exemptedSubject = exemptedSubject.trim(),
+                proposalAppNo = proposalAppNo.trim(),
+                credit = credit.coerceIn(0L, 20L),
+                guideName = resolvedGuideName,
+                guideType = resolvedGuideType,
+                guidePhone = guideAccount?.phone.orEmpty(),
+                guideWhatsapp = guideAccount?.phone.orEmpty(),
+                referenceBooks = referenceBooks.trim(),
+                timetableSlots = finalSlots,
+                periodsPerWeek = finalSlots.size.toLong()
+            )
+            val recRes = repository.adminUpsertStudentOffCourseRecord(record)
+            if (recRes.isSuccess) {
+                _snackbarEvents.emit("Enrolled $studentName in $subjectTitle ($academicYear $semester)")
+                onDone()
+            } else {
+                _snackbarEvents.emit(recRes.exceptionOrNull()?.localizedMessage ?: "Failed to enroll Off-Course student")
             }
             _isActionInProgress.value = false
         }
@@ -522,7 +686,7 @@ class MainViewModel(
             val res = accountRepository.seedSampleAccounts()
             res.onSuccess { list ->
                 if (list.isEmpty()) {
-                    _snackbarEvents.emit("Sample accounts (student1, student2, guide1, principal1) already exist.")
+                    _snackbarEvents.emit("Sample accounts (student1, student2, guide1, extguide1, principal1) already exist.")
                 } else {
                     _seededCredentialsDialog.value = list
                 }
@@ -533,7 +697,11 @@ class MainViewModel(
         }
     }
 
-    fun startBulkUserImport(rows: List<BulkImportRow>) {
+    fun startBulkUserImport(
+        rows: List<BulkImportRow>,
+        defaultYear: String = selectedAcademicYear.value,
+        defaultSemester: String = selectedSemester.value
+    ) {
         val validRows = rows.filter { it.isValid }
         if (validRows.isEmpty()) {
             showMessage("No valid rows available to import.")
@@ -541,23 +709,100 @@ class MainViewModel(
         }
         viewModelScope.launch {
             _isActionInProgress.value = true
+            val enrollRows = validRows.filter { it.hasOffCourseEnrollment }
+            val totalSteps = validRows.size + enrollRows.size
             _bulkImportState.value = BulkImportUiState(
                 isImporting = true,
                 processedCount = 0,
-                totalCount = validRows.size
+                totalCount = totalSteps
             )
-            val result = accountRepository.bulkImportAccounts(validRows) { processed, total ->
+            val accountResult = accountRepository.bulkImportAccounts(validRows) { processed, _ ->
                 _bulkImportState.value = _bulkImportState.value.copy(
                     isImporting = true,
                     processedCount = processed,
-                    totalCount = total
+                    totalCount = totalSteps
                 )
             }
-            _bulkImportState.value = result
+
+            // Build guide lookup map from existing accounts + newly imported guide rows
+            val existingAccounts = (collegeAccountsState.value as? UiState.Success)?.data.orEmpty()
+                .associateBy { it.username.lowercase() }
+                .toMutableMap()
+            validRows.filter { it.role == UserRole.GUIDE }.forEach { gRow ->
+                val key = PasswordHasher.normalizeUsername(gRow.username)
+                existingAccounts[key] = CollegeAccount(
+                    username = key,
+                    displayName = gRow.displayName,
+                    role = UserRole.GUIDE.name,
+                    phone = gRow.phone,
+                    email = gRow.email,
+                    guideType = gRow.guideType.ifBlank { GuideType.COLLEGE_FACULTY.name },
+                    institution = gRow.institution
+                )
+            }
+
+            val safeYear = defaultYear.takeIf { it.isNotBlank() && it != "ALL" } ?: "2026 - 2027"
+            val safeSem = defaultSemester.takeIf { it.isNotBlank() && it != "ALL" } ?: "Nov"
+            var enrolledCount = 0
+            val combinedFailures = accountResult.failedRows.toMutableList()
+
+            enrollRows.forEachIndexed { idx, row ->
+                val guideKey = PasswordHasher.normalizeUsername(row.assignedGuideUsername)
+                val guideAcc = existingAccounts[guideKey] ?: accountRepository.getAccountByUsername(guideKey)
+                val slots = row.timetableSlots.ifEmpty { listOf("Monday:2", "Wednesday:5") }
+                val rec = OffCourseRecord(
+                    studentUsername = PasswordHasher.normalizeUsername(row.username),
+                    studentEmail = row.email,
+                    guideUsername = guideKey,
+                    guideEmail = guideAcc?.email.orEmpty(),
+                    principalEmail = "kkhmstorage@gmail.com",
+                    studentName = row.displayName,
+                    cicAdNo = row.cicAdNo.ifBlank { row.username.uppercase() },
+                    classDepartment = row.classDepartment.ifBlank { "KKHM Scholar" },
+                    academicYear = row.academicYear.ifBlank { safeYear },
+                    semester = row.semester.ifBlank { safeSem },
+                    stream = CicStream.fromLabel(row.stream).label,
+                    collegeAfflName = "KKHM Islamic & Arts College (Affiliated to CIC)",
+                    subjectTitle = row.offCourseSubject,
+                    exemptedSubject = row.exemptedSubject,
+                    proposalAppNo = row.proposalAppNo,
+                    credit = row.credit,
+                    guideName = guideAcc?.displayName?.ifBlank { guideKey.ifBlank { "Assigned Guide" } }
+                        ?: guideKey.ifBlank { "Assigned Guide" },
+                    guideType = guideAcc?.guideType?.ifBlank { GuideType.COLLEGE_FACULTY.name }
+                        ?: GuideType.COLLEGE_FACULTY.name,
+                    guidePhone = guideAcc?.phone.orEmpty(),
+                    guideWhatsapp = guideAcc?.phone.orEmpty(),
+                    referenceBooks = row.referenceBooks,
+                    timetableSlots = slots,
+                    periodsPerWeek = slots.size.toLong()
+                )
+                val enrollRes = repository.adminUpsertStudentOffCourseRecord(rec)
+                if (enrollRes.isSuccess) {
+                    enrolledCount++
+                } else {
+                    combinedFailures += row.username to ("Off-Course enroll: " + (enrollRes.exceptionOrNull()?.localizedMessage ?: "Failed"))
+                }
+                _bulkImportState.value = _bulkImportState.value.copy(
+                    isImporting = true,
+                    processedCount = validRows.size + idx + 1,
+                    totalCount = totalSteps
+                )
+            }
+
+            val finalState = accountResult.copy(
+                isImporting = false,
+                processedCount = totalSteps,
+                totalCount = totalSteps,
+                enrolledRecordsCount = enrolledCount,
+                failedRows = combinedFailures,
+                completed = true
+            )
+            _bulkImportState.value = finalState
             _isActionInProgress.value = false
             _snackbarEvents.emit(
-                "Bulk import complete: ${result.createdCount} created, ${result.updatedCount} updated" +
-                    if (result.failedRows.isNotEmpty()) ", ${result.failedRows.size} failed" else ""
+                "Bulk import: ${finalState.createdCount} created, ${finalState.updatedCount} updated, ${finalState.enrolledRecordsCount} Off-Course enrolled" +
+                    if (finalState.failedRows.isNotEmpty()) ", ${finalState.failedRows.size} failed" else ""
             )
         }
     }
@@ -626,7 +871,8 @@ class MainViewModel(
         viewModelScope.launch {
             _isActionInProgress.value = true
             val account = (activeAccountState.value as? UiState.Success)?.data
-            val enriched = if (account != null) {
+            val isAdmin = activeRole.value == UserRole.ADMIN
+            val enriched = if (account != null && !isAdmin) {
                 record.copy(
                     studentUsername = record.studentUsername.ifBlank { account.username },
                     guideUsername = record.guideUsername.ifBlank { account.assignedGuideUsername }
@@ -634,7 +880,7 @@ class MainViewModel(
             } else {
                 record
             }
-            val result = repository.saveOffCourseRecord(enriched)
+            val result = repository.saveOffCourseRecord(enriched, asAdmin = isAdmin)
             result.onSuccess { id ->
                 if (enriched.academicYear.isNotBlank() && selectedAcademicYear.value != "ALL" &&
                     selectedAcademicYear.value != enriched.academicYear

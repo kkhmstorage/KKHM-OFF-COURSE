@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SupervisorAccount
 import androidx.compose.material3.Button
@@ -46,6 +48,8 @@ import com.example.ui.components.AcademicTermFilterBar
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.UtilizationGaugeRing
 import com.example.ui.components.signatureStatusColors
+import com.example.ui.theme.PendingAmber
+import com.example.ui.theme.VerifiedGreen
 
 @Composable
 fun GuideDashboardScreen(
@@ -81,7 +85,8 @@ fun GuideDashboardScreen(
                     (searchQuery.isBlank() ||
                         rec.studentName.contains(searchQuery, ignoreCase = true) ||
                         rec.cicAdNo.contains(searchQuery, ignoreCase = true) ||
-                        rec.subjectTitle.contains(searchQuery, ignoreCase = true))
+                        rec.subjectTitle.contains(searchQuery, ignoreCase = true) ||
+                        rec.exemptedSubject.contains(searchQuery, ignoreCase = true))
             }
             val totalAlloc = filtered.sumOf { it.totalAllocatedPeriods }
             val totalUtil = filtered.sumOf { it.totalUtilizedPeriods }
@@ -110,15 +115,15 @@ fun GuideDashboardScreen(
                                 ringSize = 96.dp
                             )
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("KKHM Guide / Mentor Console", style = MaterialTheme.typography.titleLarge)
+                                Text("KKHM Guide Console", style = MaterialTheme.typography.titleLarge)
                                 Text(
-                                    text = "Mentees: ${filtered.size} • Pending Weeks: $pendingVerifications",
+                                    text = "Assigned Students: ${filtered.size} • Pending Approvals: $pendingVerifications",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Logged in as @$activeUsername ($userEmail)",
+                                    text = "Inspect each student's per-period work and approve to unlock their next week.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -132,7 +137,7 @@ fun GuideDashboardScreen(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        label = { Text("Search mentee, CIC No, or subject") },
+                        label = { Text("Search student, CIC No, Off-Course or Exempted subject") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("guide_search_input")
                     )
@@ -143,7 +148,7 @@ fun GuideDashboardScreen(
                         FilterChip(
                             selected = onlyPending,
                             onClick = { onlyPending = !onlyPending },
-                            label = { Text("Needs Verification / Signature") }
+                            label = { Text("Pending Weekly Approvals ($pendingVerifications)") }
                         )
                         AcademicTermFilterBar(
                             terms = terms,
@@ -175,15 +180,15 @@ fun GuideDashboardScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = if (all.isEmpty()) "No Assigned Mentee Records Found"
-                                    else "No Records in $selectedYear ($selectedSemester)",
+                                    text = if (all.isEmpty()) "No Assigned Students Yet"
+                                    else "No Assigned Students in $selectedYear ($selectedSemester)",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Text(
                                     text = if (all.isEmpty()) {
-                                        "Students appear here when assigned to '@$activeUsername' or listed under '$userEmail'."
+                                        "Students assigned to '@$activeUsername' by KKHM Admin will appear here automatically."
                                     } else {
-                                        "You have ${all.size} assigned mentee record(s) under other Academic Years or Semesters."
+                                        "You have ${all.size} assigned student(s) in other Academic Years or Semesters."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -206,6 +211,7 @@ fun GuideDashboardScreen(
                 } else {
                     items(filtered, key = { it.id }) { record ->
                         val (bg, fg) = signatureStatusColors(record.guideSignatureStatus)
+                        val pendingWks = (record.completedWeeksCount - record.verifiedWeeksCount).coerceAtLeast(0L)
                         ElevatedCard(
                             onClick = { onOpenRecord(record.id) },
                             shape = RoundedCornerShape(18.dp),
@@ -221,12 +227,19 @@ fun GuideDashboardScreen(
                                     verticalAlignment = Alignment.Top
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(record.studentName, style = MaterialTheme.typography.titleMedium)
+                                        Text(record.studentName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                         Text(
                                             "${record.cicAdNo} • ${record.subjectTitle}",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurface
                                         )
+                                        if (record.exemptedSubject.isNotBlank()) {
+                                            Text(
+                                                "Exempted Subject: ${record.exemptedSubject}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
                                     StatusBadge(
                                         SignatureStatus.fromRaw(record.guideSignatureStatus).label,
@@ -234,16 +247,40 @@ fun GuideDashboardScreen(
                                         fg
                                     )
                                 }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    StatusBadge(
+                                        text = "${record.periodsPerWeek} Per./Wk • ${record.utilizationPercent}%",
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    if (pendingWks > 0) {
+                                        StatusBadge(
+                                            text = "$pendingWks Week(s) Pending Approval",
+                                            containerColor = PendingAmber.copy(alpha = 0.2f),
+                                            contentColor = PendingAmber
+                                        )
+                                    } else if (record.verifiedWeeksCount > 0) {
+                                        StatusBadge(
+                                            text = "${record.verifiedWeeksCount} Wks Approved",
+                                            containerColor = VerifiedGreen.copy(alpha = 0.16f),
+                                            contentColor = VerifiedGreen
+                                        )
+                                    }
+                                }
+
                                 Text(
-                                    text = "${record.academicYear} (${record.semester}) • Utilization: ${record.utilizationPercent}% • Logged: ${record.completedWeeksCount}/18 Wks (Verified: ${record.verifiedWeeksCount})",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    text = "${record.academicYear} (${record.semester}) • Logged: ${record.completedWeeksCount}/18 Wks (Approved: ${record.verifiedWeeksCount})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Button(
                                     onClick = { onOpenRecord(record.id) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth().testTag("guide_inspect_${record.id}")
                                 ) {
-                                    Text("View Study Reports & Period Logs")
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(if (pendingWks > 0) "Inspect & Approve ($pendingWks Pending)" else "Inspect Period Logs & Approve")
                                 }
                             }
                         }

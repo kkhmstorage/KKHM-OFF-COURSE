@@ -12,6 +12,8 @@ import com.example.data.model.TermStatus
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.data.model.WeekVerificationStatus
+import com.example.data.model.WeekAccessDecision
+import com.example.data.model.WeeklyScheduleHelper
 import com.example.data.model.WeeklyStudyReport
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -22,6 +24,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
@@ -338,7 +343,7 @@ class OffCourseRepository(
             if (!isBootstrappedAdmin()) {
                 add(
                     db.collection(path)
-                        .whereEqualTo("studentUid", studentUid)
+                        .whereEqualTo("studentUid", uid)
                         .snapshots()
                         .map { it.toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
                         .handleSnapshotErrors(OperationType.LIST, path, uid)
@@ -410,11 +415,11 @@ class OffCourseRepository(
         )
     }
 
-    fun observePrincipalRecords(userEmail: String): Flow<List<OffCourseRecord>> = flow {
+    fun observePrincipalRecords(userEmail: String, canListCampus: Boolean = false): Flow<List<OffCourseRecord>> = flow {
         val uid = requireUserId()
         val normalized = userEmail.trim().lowercase()
         val path = "off_course_records"
-        val query = if (isBootstrappedAdmin()) {
+        val query = if (isBootstrappedAdmin() || canListCampus) {
             db.collection(path)
         } else {
             if (normalized.isEmpty()) {
@@ -433,10 +438,10 @@ class OffCourseRepository(
         )
     }
 
-    fun observeAllAdminRecords(): Flow<List<OffCourseRecord>> = flow {
+    fun observeAllAdminRecords(isPortalAdmin: Boolean = false): Flow<List<OffCourseRecord>> = flow {
         val uid = requireUserId()
         val path = "off_course_records"
-        val query = if (isBootstrappedAdmin()) {
+        val query = if (isBootstrappedAdmin() || isPortalAdmin) {
             db.collection(path)
         } else {
             db.collection(path).whereEqualTo("studentUid", uid)
@@ -466,7 +471,7 @@ class OffCourseRepository(
         )
     }
 
-    suspend fun saveOffCourseRecord(record: OffCourseRecord): Result<String> {
+    suspend fun saveOffCourseRecord(record: OffCourseRecord, asAdmin: Boolean = false): Result<String> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not authenticated"))
         val isNew = record.id.isBlank()
         val docRef = if (isNew) {
@@ -483,7 +488,9 @@ class OffCourseRepository(
             val semester = record.semester.trim()
             val college = record.collegeAfflName.trim()
             val subjectTitle = record.subjectTitle.trim()
+            val exemptedSubject = record.exemptedSubject.trim().take(160)
             val guideName = record.guideName.trim()
+            val guideType = record.guideType.trim().take(40)
 
             require(studentName.length in 1..100) { "Student name is required (max 100 chars)." }
             require(cicAdNo.length in 1..40) { "CIC Admission Number is required." }
@@ -498,14 +505,25 @@ class OffCourseRepository(
             val periodsPerWeek = cleanSlots.size.toLong().coerceIn(0L, 49L)
             val studentUsername = PasswordHasher.normalizeUsername(record.studentUsername).take(40)
             val guideUsername = PasswordHasher.normalizeUsername(record.guideUsername).take(40)
-            val studentEmail = record.studentEmail.trim().lowercase().ifEmpty { currentEmailNormalized() }.take(120)
+            val studentEmail = if (asAdmin) {
+                record.studentEmail.trim().lowercase().take(120)
+            } else {
+                record.studentEmail.trim().lowercase().ifEmpty { currentEmailNormalized() }.take(120)
+            }
             val guideEmail = record.guideEmail.trim().lowercase().take(120)
             val principalEmail = record.principalEmail.trim().lowercase().take(120)
             val safeStream = CicStream.fromLabel(record.stream).label
 
             if (isNew) {
+                val targetStudentUid = if (asAdmin || isBootstrappedAdmin()) {
+                    record.studentUid.trim().ifBlank {
+                        "pending_${studentUsername.ifBlank { "student" }}"
+                    }.take(128)
+                } else {
+                    uid
+                }
                 val payload = mapOf(
-                    "studentUid" to uid,
+                    "studentUid" to targetStudentUid,
                     "studentUsername" to studentUsername,
                     "studentEmail" to studentEmail,
                     "guideUsername" to guideUsername,
@@ -520,9 +538,11 @@ class OffCourseRepository(
                     "stream" to safeStream,
                     "collegeAfflName" to college,
                     "subjectTitle" to subjectTitle,
+                    "exemptedSubject" to exemptedSubject,
                     "proposalAppNo" to record.proposalAppNo.trim().take(60),
                     "credit" to record.credit.coerceIn(0L, 20L),
                     "guideName" to guideName,
+                    "guideType" to guideType,
                     "guidePhone" to record.guidePhone.trim().take(30),
                     "guideWhatsapp" to record.guideWhatsapp.trim().take(30),
                     "referenceBooks" to record.referenceBooks.trim().take(600),
@@ -545,14 +565,14 @@ class OffCourseRepository(
                 )
                 docRef.set(payload).await()
             } else {
-                val safeStatus = if (isBootstrappedAdmin()) {
+                val safeStatus = if (asAdmin || isBootstrappedAdmin()) {
                     RecordStatus.fromRaw(record.recordStatus).name
                 } else if (record.recordStatus == RecordStatus.SUBMITTED.name) {
                     RecordStatus.SUBMITTED.name
                 } else {
                     RecordStatus.ACTIVE.name
                 }
-                val updates = mapOf(
+                val updates = mutableMapOf<String, Any>(
                     "studentUsername" to studentUsername,
                     "studentEmail" to studentEmail,
                     "guideUsername" to guideUsername,
@@ -567,9 +587,11 @@ class OffCourseRepository(
                     "stream" to safeStream,
                     "collegeAfflName" to college,
                     "subjectTitle" to subjectTitle,
+                    "exemptedSubject" to exemptedSubject,
                     "proposalAppNo" to record.proposalAppNo.trim().take(60),
                     "credit" to record.credit.coerceIn(0L, 20L),
                     "guideName" to guideName,
+                    "guideType" to guideType,
                     "guidePhone" to record.guidePhone.trim().take(30),
                     "guideWhatsapp" to record.guideWhatsapp.trim().take(30),
                     "referenceBooks" to record.referenceBooks.trim().take(600),
@@ -578,13 +600,17 @@ class OffCourseRepository(
                     "recordStatus" to safeStatus,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
+                if ((asAdmin || isBootstrappedAdmin()) && record.studentUid.isNotBlank()) {
+                    updates["studentUid"] = record.studentUid.trim().take(128)
+                }
                 docRef.update(updates).await()
                 propagateRoutingToWeeklyReports(
                     recordId = docRef.id,
                     studentUsername = studentUsername,
                     guideUsername = guideUsername,
                     guideEmail = guideEmail,
-                    principalEmail = principalEmail
+                    principalEmail = principalEmail,
+                    canManageAll = asAdmin || isBootstrappedAdmin()
                 )
             }
             Result.success(docRef.id)
@@ -596,12 +622,69 @@ class OffCourseRepository(
         }
     }
 
+    suspend fun adminUpsertStudentOffCourseRecord(record: OffCourseRecord): Result<String> {
+        val cleanUser = PasswordHasher.normalizeUsername(record.studentUsername)
+        return try {
+            requireUserId()
+            val existingMatch = if (record.id.isNotBlank()) {
+                record
+            } else if (cleanUser.isNotBlank()) {
+                db.collection("off_course_records")
+                    .whereEqualTo("studentUsername", cleanUser)
+                    .get()
+                    .await()
+                    .toObjects(OffCourseRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .firstOrNull {
+                        it.academicYear == record.academicYear.trim() &&
+                            it.semester == record.semester.trim() &&
+                            it.subjectTitle.equals(record.subjectTitle.trim(), ignoreCase = true)
+                    }
+            } else null
+
+            val merged = if (existingMatch != null) {
+                existingMatch.copy(
+                    studentUid = record.studentUid.ifBlank { existingMatch.studentUid },
+                    studentEmail = record.studentEmail.ifBlank { existingMatch.studentEmail },
+                    guideUsername = record.guideUsername,
+                    guideEmail = record.guideEmail,
+                    studentName = record.studentName,
+                    cicAdNo = record.cicAdNo,
+                    classDepartment = record.classDepartment,
+                    academicYear = record.academicYear,
+                    semester = record.semester,
+                    stream = record.stream,
+                    collegeAfflName = record.collegeAfflName,
+                    subjectTitle = record.subjectTitle,
+                    exemptedSubject = record.exemptedSubject,
+                    proposalAppNo = record.proposalAppNo,
+                    credit = record.credit,
+                    guideName = record.guideName,
+                    guideType = record.guideType,
+                    guidePhone = record.guidePhone,
+                    guideWhatsapp = record.guideWhatsapp,
+                    referenceBooks = record.referenceBooks,
+                    timetableSlots = record.timetableSlots,
+                    periodsPerWeek = record.timetableSlots.size.toLong()
+                )
+            } else {
+                record
+            }
+            saveOffCourseRecord(merged, asAdmin = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "off_course_records")
+            Result.failure(e)
+        }
+    }
+
     private suspend fun propagateRoutingToWeeklyReports(
         recordId: String,
         studentUsername: String,
         guideUsername: String,
         guideEmail: String,
-        principalEmail: String
+        principalEmail: String,
+        canManageAll: Boolean = false
     ) {
         try {
             val uid = auth.currentUser?.uid ?: return
@@ -609,7 +692,7 @@ class OffCourseRepository(
                 .document(recordId)
                 .collection("weekly_reports")
             val query = when {
-                isBootstrappedAdmin() -> collectionRef
+                isBootstrappedAdmin() || canManageAll -> collectionRef
                 studentUsername.isNotBlank() -> collectionRef.whereEqualTo("studentUsername", studentUsername)
                 else -> collectionRef.whereEqualTo("studentUid", uid)
             }
@@ -621,7 +704,7 @@ class OffCourseRepository(
                     "principalEmail" to principalEmail,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-                if (!isBootstrappedAdmin()) {
+                if (!isBootstrappedAdmin() && !canManageAll) {
                     updates["studentUsername"] = studentUsername
                 }
                 doc.reference.update(updates).await()
@@ -762,16 +845,11 @@ class OffCourseRepository(
         val cleanGuideUser = PasswordHasher.normalizeUsername(guideUsername)
         val cleanStudentUser = PasswordHasher.normalizeUsername(studentUsername)
         val normalizedEmail = currentEmailNormalized()
+        val isCampusAuthority = isBootstrappedAdmin() || role == UserRole.ADMIN || role == UserRole.PRINCIPAL
 
         val flows: List<Flow<List<WeeklyStudyReport>>> = when {
-            isBootstrappedAdmin() -> listOf(
+            isCampusAuthority -> listOf(
                 collectionRef.snapshots()
-                    .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                    .handleSnapshotErrors(OperationType.LIST, path, uid)
-            )
-            role == UserRole.PRINCIPAL -> listOf(
-                collectionRef.whereEqualTo("principalEmail", normalizedEmail)
-                    .snapshots()
                     .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
                     .handleSnapshotErrors(OperationType.LIST, path, uid)
             )
@@ -795,7 +873,7 @@ class OffCourseRepository(
             }
             else -> buildList {
                 add(
-                    collectionRef.whereEqualTo("studentUid", studentUid)
+                    collectionRef.whereEqualTo("studentUid", uid)
                         .snapshots()
                         .map { it.toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
                         .handleSnapshotErrors(OperationType.LIST, path, uid)
@@ -826,16 +904,45 @@ class OffCourseRepository(
         )
     }
 
+    suspend fun fetchWeeklyReportsForRecords(
+        recordIds: List<String>
+    ): Result<Map<String, List<WeeklyStudyReport>>> {
+        return try {
+            requireUserId()
+            val uniqueIds = recordIds.filter { it.isNotBlank() }.distinct()
+            val map = coroutineScope {
+                uniqueIds.map { recId ->
+                    async {
+                        val reports = db.collection("off_course_records")
+                            .document(recId)
+                            .collection("weekly_reports")
+                            .get()
+                            .await()
+                            .toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                            .sortedBy { it.weekNumber }
+                        recId to reports
+                    }
+                }.awaitAll().toMap()
+            }
+            Result.success(map)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "off_course_records/weekly_reports")
+            Result.failure(e)
+        }
+    }
+
     suspend fun saveWeeklyReport(
         record: OffCourseRecord,
         report: WeeklyStudyReport
     ): Result<Unit> {
         val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not authenticated"))
         val weekId = "week_${report.weekNumber.toString().padStart(2, '0')}"
-        val docRef = db.collection("off_course_records")
+        val reportsCol = db.collection("off_course_records")
             .document(record.id)
             .collection("weekly_reports")
-            .document(weekId)
+        val docRef = reportsCol.document(weekId)
         val docPath = docRef.path
 
         return try {
@@ -848,10 +955,36 @@ class OffCourseRepository(
 
             val studentUsername = PasswordHasher.normalizeUsername(record.studentUsername).take(40)
             val guideUsername = PasswordHasher.normalizeUsername(record.guideUsername).take(40)
+
+            // Strict sequential Guide-approval check
+            val existingReportsByUid = reportsCol.whereEqualTo("studentUid", uid).get().await()
+                .toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            val existingReportsByUsername = if (studentUsername.isNotBlank()) {
+                reportsCol.whereEqualTo("studentUsername", studentUsername).get().await()
+                    .toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            } else emptyList()
+            val combinedExisting = (existingReportsByUid + existingReportsByUsername).distinctBy { it.id }
+
+            when (val access = WeeklyScheduleHelper.canAccessWeek(weekNum.toInt(), combinedExisting)) {
+                WeekAccessDecision.Allowed -> Unit
+                WeekAccessDecision.AlreadyVerifiedLocked -> {
+                    throw IllegalStateException("Week $weekNum is already approved by your Guide and locked.")
+                }
+                is WeekAccessDecision.LockedAwaitingGuideApproval -> {
+                    val msg = if (access.missingWeekOnly) {
+                        "Please fill Week ${access.blockingWeekNumber} and get Guide approval before adding Week $weekNum."
+                    } else {
+                        "Week ${access.blockingWeekNumber} (${access.blockingStatus.label}) requires Guide approval first. Please approach your Guide (${record.guideName}) to approve Week ${access.blockingWeekNumber}."
+                    }
+                    throw IllegalStateException(msg)
+                }
+            }
+
             val existing = docRef.get().await()
             if (existing.exists()) {
                 docRef.update(
                     mapOf(
+                        "studentUid" to uid,
                         "studentUsername" to studentUsername,
                         "guideUsername" to guideUsername,
                         "guideEmail" to record.guideEmail.trim().lowercase().take(120),
@@ -896,14 +1029,16 @@ class OffCourseRepository(
                 ).await()
             }
 
-            if (record.studentUid == uid && record.recordStatus in listOf(RecordStatus.ACTIVE.name, RecordStatus.SUBMITTED.name)) {
-                val allReports = db.collection("off_course_records")
-                    .document(record.id)
-                    .collection("weekly_reports")
-                    .whereEqualTo("studentUid", uid)
-                    .get()
-                    .await()
+            val isRecordStudentOwner = record.studentUid == uid ||
+                (studentUsername.isNotBlank() && record.studentUsername == studentUsername)
+            if (isRecordStudentOwner && record.recordStatus in listOf(RecordStatus.ACTIVE.name, RecordStatus.SUBMITTED.name)) {
+                val refreshedByUid = reportsCol.whereEqualTo("studentUid", uid).get().await()
                     .toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                val refreshedByUser = if (studentUsername.isNotBlank()) {
+                    reportsCol.whereEqualTo("studentUsername", studentUsername).get().await()
+                        .toObjects(WeeklyStudyReport::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } else emptyList()
+                val allReports = (refreshedByUid + refreshedByUser).distinctBy { it.id }
 
                 val completedCount = allReports.size.toLong().coerceIn(0L, 24L)
                 val verifiedCount = allReports.count { it.verificationStatus == WeekVerificationStatus.VERIFIED.name }.toLong().coerceIn(0L, 24L)
@@ -964,10 +1099,9 @@ class OffCourseRepository(
                 .document(record.id)
                 .collection("weekly_reports")
             val cleanGuideUser = PasswordHasher.normalizeUsername(record.guideUsername)
+            val isCampusAuthority = isBootstrappedAdmin() || role == UserRole.ADMIN || role == UserRole.PRINCIPAL
             val query = when {
-                isBootstrappedAdmin() -> collectionRef
-                role == UserRole.PRINCIPAL || role == UserRole.ADMIN ->
-                    collectionRef.whereEqualTo("principalEmail", currentEmailNormalized())
+                isCampusAuthority -> collectionRef
                 cleanGuideUser.isNotBlank() && record.guideEmail.isBlank() ->
                     collectionRef.whereEqualTo("guideUsername", cleanGuideUser)
                 record.guideEmail.isNotBlank() && record.guideEmail.equals(currentEmailNormalized(), ignoreCase = true) ->

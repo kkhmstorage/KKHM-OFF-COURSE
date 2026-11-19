@@ -97,6 +97,28 @@ enum class WeekVerificationStatus(val label: String) {
     }
 }
 
+enum class GuideType(val label: String) {
+    COLLEGE_FACULTY("College Teacher"),
+    EXTERNAL("External / Non-College Guide");
+
+    companion object {
+        fun fromRaw(raw: String?): GuideType =
+            entries.firstOrNull {
+                it.name.equals(raw, ignoreCase = true) ||
+                    it.label.equals(raw, ignoreCase = true)
+            } ?: COLLEGE_FACULTY
+    }
+}
+
+val STUDY_ACTIVITY_TYPES = listOf(
+    "Reading & Research",
+    "Translation",
+    "Notes Preparation",
+    "Assignment / Project",
+    "Mentor Discussion",
+    "Revision & Practice"
+)
+
 val CIC_DAYS = listOf(
     "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 )
@@ -140,6 +162,9 @@ data class CollegeAccount(
     val stream: String = "",
     val assignedGuideUsername: String = "",
     val phone: String = "",
+    val email: String = "",
+    val guideType: String = "",
+    val institution: String = "",
     val boundUid: String = "",
     val createdByUid: String = "",
     val createdAt: Timestamp? = null,
@@ -181,9 +206,11 @@ data class OffCourseRecord(
     val stream: String = CicStream.WAFY.label,
     val collegeAfflName: String = "",
     val subjectTitle: String = "",
+    val exemptedSubject: String = "",
     val proposalAppNo: String = "",
     val credit: Long = 4L,
     val guideName: String = "",
+    val guideType: String = "",
     val guidePhone: String = "",
     val guideWhatsapp: String = "",
     val referenceBooks: String = "",
@@ -211,6 +238,16 @@ data class OffCourseRecord(
                 .coerceIn(0, 100)
         } else 0
 }
+
+data class StudentOffCourseSummary(
+    val studentKey: String,
+    val studentName: String,
+    val studentUsername: String,
+    val cicAdNo: String,
+    val classDepartment: String,
+    val stream: String,
+    val records: List<OffCourseRecord>
+)
 
 @Keep
 @IgnoreExtraProperties
@@ -251,22 +288,39 @@ data class PeriodLogEntry(
     val period: Int,
     val effectiveness: String, // EFFECTIVE, PARTIAL, MISSED
     val minutes: Int,
-    val note: String
+    val note: String,
+    val activityType: String = ""
 ) {
-    fun encode(): String =
-        listOf(day, "P$period", effectiveness, "${minutes}m", note.replace("|", "/").trim())
-            .joinToString("|")
+    fun encode(): String {
+        val safeNote = note.replace("|", "/").trim()
+        val safeActivity = activityType.replace("|", "/").trim()
+        return if (safeActivity.isNotEmpty()) {
+            listOf(day, "P$period", effectiveness, "${minutes}m", safeActivity, safeNote)
+                .joinToString("|")
+        } else {
+            listOf(day, "P$period", effectiveness, "${minutes}m", safeNote)
+                .joinToString("|")
+        }
+    }
 
     companion object {
         fun decode(raw: String): PeriodLogEntry? {
-            val parts = raw.split("|", limit = 5)
+            val parts = raw.split("|", limit = 6)
             if (parts.size < 4) return null
             val day = parts[0]
             val period = parts[1].removePrefix("P").toIntOrNull() ?: 1
             val effectiveness = parts[2]
             val minutes = parts[3].removeSuffix("m").toIntOrNull() ?: 45
-            val note = parts.getOrElse(4) { "" }
-            return PeriodLogEntry(day, period, effectiveness, minutes, note)
+            val activityType = if (parts.size >= 6) parts[4] else ""
+            val note = if (parts.size >= 6) parts[5] else parts.getOrElse(4) { "" }
+            return PeriodLogEntry(
+                day = day,
+                period = period,
+                effectiveness = effectiveness,
+                minutes = minutes,
+                note = note,
+                activityType = activityType
+            )
         }
     }
 }

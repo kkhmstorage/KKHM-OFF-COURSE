@@ -39,11 +39,16 @@ class ExampleUnitTest {
         val template = BulkUserCsvHelper.buildTemplateCsv()
         val result = BulkUserCsvHelper.parseCsvText(template, existingUsernames = emptySet())
         assertNull(result.fatalError)
-        assertEquals(4, result.rows.size)
-        assertEquals(4, result.validRows.size)
+        assertEquals(5, result.rows.size)
+        assertEquals(5, result.validRows.size)
         assertTrue(result.invalidRows.isEmpty())
         assertEquals(UserRole.GUIDE, result.rows[0].role)
-        assertEquals(CicStream.WAFIYYA.label, result.rows[2].stream)
+        assertEquals("COLLEGE_FACULTY", result.rows[0].guideType)
+        assertEquals("EXTERNAL", result.rows[1].guideType)
+        assertEquals(CicStream.WAFIYYA.label, result.rows[3].stream)
+        assertEquals(2, result.offCourseEnrollCount)
+        assertEquals("Classical Usul II", result.rows[3].exemptedSubject)
+        assertEquals(listOf("Monday:2", "Wednesday:5"), result.rows[3].timetableSlots)
     }
 
     @Test
@@ -81,6 +86,67 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun `sequential guide approval lock blocks week N+1 until week N is VERIFIED`() {
+        val w1Pending = WeeklyStudyReport(weekNumber = 1L, verificationStatus = "PENDING")
+        val lockPending = WeeklyScheduleHelper.resolveWeeklyLockState(listOf(w1Pending))
+        assertFalse(lockPending.canAddNextWeek)
+        assertEquals(1L, lockPending.blockingUnverifiedReport?.weekNumber)
+        assertTrue(
+            WeeklyScheduleHelper.canAccessWeek(2, listOf(w1Pending)) is com.example.data.model.WeekAccessDecision.LockedAwaitingGuideApproval
+        )
+        assertEquals(
+            com.example.data.model.WeekAccessDecision.Allowed,
+            WeeklyScheduleHelper.canAccessWeek(1, listOf(w1Pending))
+        )
+
+        val w1Revision = WeeklyStudyReport(weekNumber = 1L, verificationStatus = "NEEDS_REVISION")
+        assertTrue(
+            WeeklyScheduleHelper.canAccessWeek(2, listOf(w1Revision)) is com.example.data.model.WeekAccessDecision.LockedAwaitingGuideApproval
+        )
+
+        val w1Verified = WeeklyStudyReport(weekNumber = 1L, verificationStatus = "VERIFIED")
+        val lockVerified = WeeklyScheduleHelper.resolveWeeklyLockState(listOf(w1Verified))
+        assertTrue(lockVerified.canAddNextWeek)
+        assertEquals(2, lockVerified.nextUnlockedWeek)
+        assertEquals(
+            com.example.data.model.WeekAccessDecision.Allowed,
+            WeeklyScheduleHelper.canAccessWeek(2, listOf(w1Verified))
+        )
+        assertEquals(
+            com.example.data.model.WeekAccessDecision.AlreadyVerifiedLocked,
+            WeeklyScheduleHelper.canAccessWeek(1, listOf(w1Verified))
+        )
+    }
+
+    @Test
+    fun `authentic period report validation enforces meaningful notes, minutes, activity type, and confirmation`() {
+        val weakEntry = PeriodLogEntry("Monday", 2, "EFFECTIVE", 45, "ok", "Reading / Textbook")
+        assertNotNull(WeeklyScheduleHelper.validateAuthenticPeriodReport(listOf(weakEntry), true, ""))
+
+        val shortMins = PeriodLogEntry("Monday", 2, "EFFECTIVE", 5, "Read Surah Al-Kahf commentary carefully", "Reading / Textbook")
+        assertNotNull(WeeklyScheduleHelper.validateAuthenticPeriodReport(listOf(shortMins), true, ""))
+
+        val goodEntry = PeriodLogEntry("Monday", 2, "EFFECTIVE", 45, "Read Surah Al-Kahf Tafsir pages 10-18", "Reading / Textbook")
+        assertNotNull(WeeklyScheduleHelper.validateAuthenticPeriodReport(listOf(goodEntry), false, ""))
+        assertNull(WeeklyScheduleHelper.validateAuthenticPeriodReport(listOf(goodEntry), true, ""))
+    }
+
+    @Test
+    fun `period log entry decodes both legacy 5-part and new 6-part formats`() {
+        val legacy = PeriodLogEntry.decode("Monday|P2|EFFECTIVE|45m|Legacy study note")
+        assertNotNull(legacy)
+        assertEquals("Monday", legacy!!.day)
+        assertEquals(2, legacy.period)
+        assertEquals(45, legacy.minutes)
+        assertEquals("", legacy.activityType)
+        assertEquals("Legacy study note", legacy.note)
+
+        val modern = PeriodLogEntry("Wednesday", 5, "PARTIAL", 30, "Reviewed grammar exercises", "Note Making")
+        val decoded = PeriodLogEntry.decode(modern.encode())
+        assertEquals(modern, decoded)
+    }
+
+    @Test
     fun `suggestWeekDateRange advances sequentially from prior week dateTo`() {
         val prev = WeeklyStudyReport(
             weekNumber = 1L,
@@ -108,8 +174,10 @@ class ExampleUnitTest {
             entries[1].copy(effectiveness = "PARTIAL", minutes = 25, note = "Prepared Arabic notes")
         )
         val composed = WeeklyScheduleHelper.composeWeeklyDescription("", edited)
-        assertTrue(composed.contains("Mon P3: Studied Surah Al-Kahf commentary"))
-        assertTrue(composed.contains("Wed P6: Prepared Arabic notes"))
+        assertTrue(composed.contains("Mon P3:"))
+        assertTrue(composed.contains("Studied Surah Al-Kahf commentary"))
+        assertTrue(composed.contains("Wed P6:"))
+        assertTrue(composed.contains("Prepared Arabic notes"))
         assertEquals("Custom overview", WeeklyScheduleHelper.composeWeeklyDescription("Custom overview", edited))
     }
 

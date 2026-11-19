@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -81,6 +82,7 @@ import com.example.ui.screens.OffCourseRecordFormScreen
 import com.example.ui.screens.PortalLoginScreen
 import com.example.ui.screens.PrincipalDashboardScreen
 import com.example.ui.screens.RecordBookDetailScreen
+import com.example.ui.screens.StudentHistoryScreen
 import com.example.ui.screens.StudentHomeScreen
 import com.example.ui.theme.CicOffCourseTheme
 import com.example.ui.viewmodel.MainViewModel
@@ -94,12 +96,16 @@ object Routes {
     const val SETTINGS = "settings"
     const val RECORD_FORM = "record_form?recordId={recordId}"
     const val RECORD_DETAIL = "record_detail/{recordId}?openNextWeek={openNextWeek}"
+    const val STUDENT_HISTORY = "student_history/{studentKey}"
 
     fun recordForm(recordId: String? = null): String =
         if (recordId.isNullOrBlank()) "record_form" else "record_form?recordId=$recordId"
 
     fun recordDetail(recordId: String, openNextWeek: Boolean = false): String =
         "record_detail/$recordId?openNextWeek=$openNextWeek"
+
+    fun studentHistory(studentKey: String): String =
+        "student_history/${Uri.encode(studentKey)}"
 }
 
 class MainActivity : ComponentActivity() {
@@ -197,6 +203,9 @@ fun AuthenticatedShell(
     val adminRecordsState by viewModel.adminRecordsState.collectAsStateWithLifecycle()
     val selectedRecordState by viewModel.selectedRecordState.collectAsStateWithLifecycle()
     val weeklyReportsState by viewModel.weeklyReportsState.collectAsStateWithLifecycle()
+    val studentInlineReportsState by viewModel.studentInlineReportsState.collectAsStateWithLifecycle()
+    val consolidatedReports by viewModel.consolidatedReports.collectAsStateWithLifecycle()
+    val isLoadingConsolidated by viewModel.isLoadingConsolidated.collectAsStateWithLifecycle()
     val selectedYear by viewModel.selectedAcademicYear.collectAsStateWithLifecycle()
     val selectedSemester by viewModel.selectedSemester.collectAsStateWithLifecycle()
     val assignedGuideAccount by viewModel.assignedGuideAccount.collectAsStateWithLifecycle()
@@ -246,10 +255,7 @@ fun AuthenticatedShell(
     val currentRoute = backStackEntry?.destination?.route
     val showMainChrome = currentRoute == Routes.WORKSPACE || currentRoute == Routes.SETTINGS
 
-    val exportRecordPdf: (OffCourseRecord) -> Unit = { record ->
-        val reports = (weeklyReportsState as? UiState.Success)?.data
-            ?.filter { it.recordId == record.id }
-            .orEmpty()
+    val exportRecordPdfWithReports: (OffCourseRecord, List<com.example.data.model.WeeklyStudyReport>) -> Unit = { record, reports ->
         val res = OffCoursePdfExporter.exportAndShareRecordPdf(context, record, reports)
         if (res.isFailure) {
             viewModel.showMessage(res.exceptionOrNull()?.localizedMessage ?: "Failed to export PDF")
@@ -387,6 +393,7 @@ fun AuthenticatedShell(
                 when (activeRole) {
                     UserRole.STUDENT -> StudentHomeScreen(
                         recordsState = studentRecordsState,
+                        inlineReportsState = studentInlineReportsState,
                         terms = terms,
                         selectedYear = selectedYear,
                         selectedSemester = selectedSemester,
@@ -396,13 +403,12 @@ fun AuthenticatedShell(
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
                         },
-                        onQuickLogNextWeek = { id ->
-                            viewModel.selectRecord(id)
-                            navController.navigate(Routes.recordDetail(id, openNextWeek = true))
+                        onSaveInlineWeeklyReport = { rec, rep ->
+                            viewModel.saveWeeklyReport(rec, rep)
                         },
                         onShowAllTerms = showAllTerms,
                         onCreateNewRecord = { navController.navigate(Routes.recordForm()) },
-                        onExportPdf = exportRecordPdf
+                        onExportPdf = exportRecordPdfWithReports
                     )
                     UserRole.GUIDE -> GuideDashboardScreen(
                         recordsState = guideRecordsState,
@@ -432,6 +438,9 @@ fun AuthenticatedShell(
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
                         },
+                        onOpenStudentHistory = { studentKey ->
+                            navController.navigate(Routes.studentHistory(studentKey))
+                        },
                         onOpenAcademicSettings = {
                             navController.navigate(Routes.SETTINGS)
                         }
@@ -439,6 +448,8 @@ fun AuthenticatedShell(
                     UserRole.ADMIN -> AdminDashboardScreen(
                         accountsState = collegeAccountsState,
                         recordsState = adminRecordsState,
+                        consolidatedReports = consolidatedReports,
+                        isLoadingConsolidated = isLoadingConsolidated,
                         terms = terms,
                         selectedYear = selectedYear,
                         selectedSemester = selectedSemester,
@@ -447,8 +458,44 @@ fun AuthenticatedShell(
                         onSelectYear = viewModel::selectAcademicYear,
                         onSelectSemester = viewModel::selectSemester,
                         onShowAllTerms = showAllTerms,
-                        onSaveAccount = { u, n, r, p, st, cic, dept, str, gUser, ph ->
-                            viewModel.saveCollegeAccount(u, n, r, p, st, cic, dept, str, gUser, ph)
+                        onSaveAccount = { payload ->
+                            viewModel.saveCollegeAccount(
+                                username = payload.username,
+                                displayName = payload.displayName,
+                                role = payload.role,
+                                passwordOrNull = payload.passwordOrNull,
+                                status = payload.status,
+                                cicAdNo = payload.cicAdNo,
+                                classDepartment = payload.classDepartment,
+                                stream = payload.stream,
+                                assignedGuideUsername = payload.assignedGuideUsername,
+                                phone = payload.phone,
+                                email = payload.email,
+                                guideType = payload.guideType,
+                                institution = payload.institution
+                            )
+                        },
+                        onEnrollStudentOffCourse = { enroll ->
+                            viewModel.adminEnrollStudentOffCourse(
+                                studentUsername = enroll.studentUsername,
+                                studentName = enroll.studentName,
+                                passwordOrNull = enroll.passwordOrNull,
+                                cicAdNo = enroll.cicAdNo,
+                                classDepartment = enroll.classDepartment,
+                                stream = enroll.stream,
+                                phone = enroll.phone,
+                                academicYear = enroll.academicYear,
+                                semester = enroll.semester,
+                                subjectTitle = enroll.subjectTitle,
+                                exemptedSubject = enroll.exemptedSubject,
+                                credit = enroll.credit,
+                                guideAccount = enroll.guideAccount,
+                                guideUsernameFallback = enroll.guideUsernameFallback,
+                                guideNameFallback = enroll.guideNameFallback,
+                                timetableSlots = enroll.timetableSlots,
+                                proposalAppNo = enroll.proposalAppNo,
+                                referenceBooks = enroll.referenceBooks
+                            )
                         },
                         onResetPassword = { u, pwd -> viewModel.resetAccountPassword(u, pwd) },
                         onToggleAccountStatus = viewModel::updateAccountStatus,
@@ -458,10 +505,42 @@ fun AuthenticatedShell(
                             viewModel.selectRecord(id)
                             navController.navigate(Routes.recordDetail(id))
                         },
+                        onOpenStudentHistory = { studentKey ->
+                            navController.navigate(Routes.studentHistory(studentKey))
+                        },
                         onReassignGuide = viewModel::adminReassignGuide,
                         onDeleteRecord = { id -> viewModel.deleteRecord(id) },
+                        onLoadConsolidatedReports = viewModel::loadConsolidatedReportsFor,
+                        onPrintConsolidated = { weekFilter, filteredRecords ->
+                            val res = OffCoursePdfExporter.printConsolidatedWeeklyReport(
+                                context = context,
+                                academicYear = selectedYear,
+                                semester = selectedSemester,
+                                weekFilter = weekFilter,
+                                records = filteredRecords,
+                                reportsByRecordId = consolidatedReports
+                            )
+                            if (res.isFailure) {
+                                viewModel.showMessage(res.exceptionOrNull()?.localizedMessage ?: "Print failed")
+                            }
+                        },
+                        onShareConsolidatedPdf = { weekFilter, filteredRecords ->
+                            val res = OffCoursePdfExporter.shareConsolidatedWeeklyReportPdf(
+                                context = context,
+                                academicYear = selectedYear,
+                                semester = selectedSemester,
+                                weekFilter = weekFilter,
+                                records = filteredRecords,
+                                reportsByRecordId = consolidatedReports
+                            )
+                            if (res.isFailure) {
+                                viewModel.showMessage(res.exceptionOrNull()?.localizedMessage ?: "PDF export failed")
+                            }
+                        },
                         bulkImportState = bulkImportState,
-                        onStartBulkImport = viewModel::startBulkUserImport,
+                        onStartBulkImport = { rows ->
+                            viewModel.startBulkUserImport(rows, selectedYear, selectedSemester)
+                        },
                         onResetBulkImport = viewModel::resetBulkImportState,
                         onShowMessage = viewModel::showMessage
                     )
@@ -577,6 +656,33 @@ fun AuthenticatedShell(
                     onSubmitPrincipalApproval = viewModel::submitPrincipalApproval,
                     onUpdateNotifications = viewModel::updateNotificationSettings,
                     onSendTestNotification = { viewModel.sendTestNotification() }
+                )
+            }
+
+            composable(
+                route = Routes.STUDENT_HISTORY,
+                arguments = listOf(
+                    navArgument("studentKey") { type = NavType.StringType }
+                )
+            ) { entry ->
+                val rawKey = entry.arguments?.getString("studentKey").orEmpty()
+                val decodedKey = Uri.decode(rawKey)
+                val combinedRecords = remember(adminRecordsState, principalRecordsState) {
+                    val adminList = (adminRecordsState as? UiState.Success)?.data.orEmpty()
+                    val prinList = (principalRecordsState as? UiState.Success)?.data.orEmpty()
+                    (adminList + prinList).distinctBy { it.id }
+                }
+                StudentHistoryScreen(
+                    studentKey = decodedKey,
+                    allRecords = combinedRecords,
+                    reportsByRecordId = consolidatedReports,
+                    isLoadingReports = isLoadingConsolidated,
+                    onLoadReports = viewModel::loadConsolidatedReportsFor,
+                    onOpenRecord = { id ->
+                        viewModel.selectRecord(id)
+                        navController.navigate(Routes.recordDetail(id))
+                    },
+                    onBack = { navController.popBackStack() }
                 )
             }
         }

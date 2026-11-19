@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -63,6 +62,8 @@ import com.example.ui.theme.VerifiedGreen
 @Composable
 fun BulkUserImportDialog(
     existingUsernames: Set<String>,
+    selectedYear: String,
+    selectedSemester: String,
     importState: BulkImportUiState,
     onStartImport: (List<BulkImportRow>) -> Unit,
     onResetImportState: () -> Unit,
@@ -93,6 +94,8 @@ fun BulkUserImportDialog(
         }
     }
 
+    val fallbackTermLabel = "${if (selectedYear == "ALL") "2026 - 2027" else selectedYear} (${if (selectedSemester == "ALL") "Nov" else selectedSemester})"
+
     Dialog(
         onDismissRequest = { if (!importState.isImporting) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -116,12 +119,12 @@ fun BulkUserImportDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Bulk User Import (CSV)",
+                            text = "Bulk Students & Off-Course CSV",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Download template, fill in Excel / Sheets, then upload CSV",
+                            text = "Add users, Guides (College/External) & enroll Off-Course subjects at once • Fallback term: $fallbackTermLabel",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -151,7 +154,7 @@ fun BulkUserImportDialog(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Columns: username, display_name, password, role (STUDENT/GUIDE/PRINCIPAL/ADMIN), account_status, cic_ad_no, class_department, stream, assigned_guide_username, phone",
+                            text = "Supports accounts + Off-Course columns: off_course_subject, exempted_subject, academic_year, semester, assigned_guide_username, guide_type (COLLEGE_FACULTY / EXTERNAL), institution, timetable_slots (e.g. Monday:2;Wednesday:5)",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -276,6 +279,13 @@ fun BulkUserImportDialog(
                                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                             )
+                            if (currentParse.offCourseEnrollCount > 0) {
+                                StatusBadge(
+                                    text = "Off-Course: ${currentParse.offCourseEnrollCount}",
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
                             if (currentParse.invalidRows.isNotEmpty()) {
                                 StatusBadge(
                                     text = "Invalid: ${currentParse.invalidRows.size}",
@@ -320,6 +330,7 @@ fun BulkUserImportDialog(
                                             if (row.isValid) {
                                                 val details = listOfNotNull(
                                                     row.role.title,
+                                                    row.guideType.takeIf { it.isNotBlank() },
                                                     row.stream.takeIf { it.isNotBlank() },
                                                     row.assignedGuideUsername.takeIf { it.isNotBlank() }?.let { "Guide: @$it" }
                                                 ).joinToString(" • ")
@@ -328,6 +339,13 @@ fun BulkUserImportDialog(
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
+                                                if (row.hasOffCourseEnrollment) {
+                                                    Text(
+                                                        text = "Off-Course: ${row.offCourseSubject}${if (row.exemptedSubject.isNotBlank()) " | Exempted: ${row.exemptedSubject}" else ""}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
                                             } else {
                                                 Text(
                                                     text = row.validationError.orEmpty(),
@@ -367,7 +385,7 @@ fun BulkUserImportDialog(
                     } else 0f
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = "Creating / updating accounts: ${importState.processedCount} of ${importState.totalCount}…",
+                            text = "Processing accounts & Off-Course enrollments: ${importState.processedCount} of ${importState.totalCount}…",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium
                         )
@@ -387,7 +405,7 @@ fun BulkUserImportDialog(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = "Import Finished: ${importState.createdCount} Created • ${importState.updatedCount} Updated • ${importState.failedRows.size} Failed",
+                                text = "Done: ${importState.createdCount} Created • ${importState.updatedCount} Updated • ${importState.enrolledRecordsCount} Enrolled • ${importState.failedRows.size} Failed",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = VerifiedGreen
                             )
@@ -428,7 +446,7 @@ fun BulkUserImportDialog(
                             .heightIn(min = 48.dp)
                             .testTag("bulk_confirm_import_button")
                     ) {
-                        Text("Import $validCount Users")
+                        Text("Import $validCount Rows")
                     }
                 }
             }
