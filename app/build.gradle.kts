@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.cicoffcourse.mvrkpt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2 + ciRunNumber
-    versionName = if (ciRunNumber > 0) "1.1.$ciRunNumber" else "1.1"
+    versionCode = 20 + ciRunNumber
+    versionName = if (ciRunNumber > 0) "1.2.$ciRunNumber" else "1.2"
 
     buildConfigField("int", "CI_RUN_NUMBER", "$ciRunNumber")
     buildConfigField("String", "BUILD_COMMIT_SHA", "\"$ciCommitSha\"")

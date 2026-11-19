@@ -61,8 +61,12 @@ jobs:
             echo "Using persistent debug.keystore from GitHub Actions secret."
             printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > debug.keystore
             KEYSTORE_SOURCE="GitHub Secret (DEBUG_KEYSTORE_BASE64)"
+          elif [ -f debug.keystore.base64 ]; then
+            echo "Using persistent debug.keystore from repository debug.keystore.base64."
+            tr -d '\n\r ' < debug.keystore.base64 | base64 --decode > debug.keystore
+            KEYSTORE_SOURCE="Repository persistent keystore (debug.keystore.base64)"
           else
-            echo "DEBUG_KEYSTORE_BASE64 secret not configured; generating ephemeral debug.keystore."
+            echo "No persistent debug keystore found; generating ephemeral debug.keystore."
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -87,8 +91,8 @@ jobs:
             echo "- **Signing SHA-1:** \`${SHA1}\`"
             echo "- **Signing SHA-256:** \`${SHA256}\`"
             echo ""
-            if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
-              echo "> **Google Sign-In & Firebase Note:** Because \`DEBUG_KEYSTORE_BASE64\` is not yet saved in GitHub Secrets, this APK was signed with a new keystore. To enable Google Sign-In on this APK, add the **Signing SHA-1** above inside **Firebase Console → Project Settings (\`gen-lang-client-0628851552\`) → Your apps (\`com.aistudio.cicoffcourse.mvrkpt\`) → Add fingerprint**."
+            if [ "$KEYSTORE_SOURCE" = "Auto-generated ephemeral keystore" ]; then
+              echo "> **Google Sign-In & Firebase Note:** Because no persistent keystore was found, this APK was signed with an ephemeral keystore. Add the **Signing SHA-1** above inside **Firebase Console → Project Settings (\`gen-lang-client-0628851552\`) → Your apps (\`com.aistudio.cicoffcourse.mvrkpt\`) → Add fingerprint**."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -110,8 +114,8 @@ jobs:
           COMMIT_MSG=$(git log -1 --pretty=%s || echo "Latest update")
           SHORT_SHA="${GITHUB_SHA:0:7}"
           RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
-          VERSION_CODE=$((2 + RUN_NUM))
-          VERSION_NAME="1.1.${RUN_NUM}"
+          VERSION_CODE=$((20 + RUN_NUM))
+          VERSION_NAME="1.2.${RUN_NUM}"
           PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           APK_URL="https://github.com/${{ github.repository }}/releases/download/latest/KKHM-Off-Course-debug.apk"
           RELEASE_PAGE_URL="https://github.com/${{ github.repository }}/releases/tag/latest"
@@ -153,7 +157,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
-          VERSION_NAME="1.1.${RUN_NUM}"
+          VERSION_NAME="1.2.${RUN_NUM}"
           if gh release view latest >/dev/null 2>&1; then
             gh release upload latest dist/KKHM-Off-Course-debug.apk dist/version.json --clobber
             gh release edit latest \

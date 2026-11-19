@@ -233,6 +233,7 @@ fun AuthScreen(
                         scope = scope,
                         onAuthCancelled = {
                             isLoading = false
+                            errorMessage = "Google Sign-In did not complete. Please select your Google account again. If this repeats after installing an update, uninstall the old APK and install the latest release signed with the official KKHM keystore."
                         }
                     )
                 },
